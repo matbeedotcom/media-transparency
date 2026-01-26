@@ -1,0 +1,980 @@
+openapi: 3.1.0
+info:
+  title: MITDS API
+  description: Media Influence Topology & Detection System REST API
+  version: 1.0.0
+  contact:
+    name: MITDS Team
+
+servers:
+  - url: http://localhost:8000/api/v1
+    description: Local development
+  - url: https://api.mitds.example/v1
+    description: Production
+
+tags:
+  - name: Entities
+    description: Entity CRUD and search operations
+  - name: Relationships
+    description: Relationship queries and graph traversal
+  - name: Detection
+    description: Coordination detection and analysis
+  - name: Reports
+    description: Report generation and templates
+  - name: Ingestion
+    description: Data ingestion status and triggers
+
+paths:
+  # ============== ENTITIES ==============
+
+  /entities:
+    get:
+      summary: Search entities
+      tags: [Entities]
+      operationId: searchEntities
+      parameters:
+        - name: q
+          in: query
+          description: Search query (name, alias, identifier)
+          schema:
+            type: string
+        - name: type
+          in: query
+          description: Filter by entity type
+          schema:
+            $ref: '#/components/schemas/EntityType'
+        - name: jurisdiction
+          in: query
+          description: Filter by jurisdiction (for organizations)
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntitySearchResponse'
+
+  /entities/{id}:
+    get:
+      summary: Get entity by ID
+      tags: [Entities]
+      operationId: getEntity
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Entity details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Entity'
+        '404':
+          description: Entity not found
+
+  /entities/{id}/relationships:
+    get:
+      summary: Get entity relationships
+      tags: [Entities, Relationships]
+      operationId: getEntityRelationships
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: rel_type
+          in: query
+          description: Filter by relationship type
+          schema:
+            $ref: '#/components/schemas/RelationshipType'
+        - name: direction
+          in: query
+          description: Relationship direction from entity
+          schema:
+            type: string
+            enum: [inbound, outbound, both]
+            default: both
+        - name: as_of
+          in: query
+          description: Point-in-time query (ISO 8601)
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Relationships
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RelationshipListResponse'
+
+  /entities/{id}/evidence:
+    get:
+      summary: Get evidence for entity
+      tags: [Entities]
+      operationId: getEntityEvidence
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Evidence list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvidenceListResponse'
+
+  # ============== RELATIONSHIPS ==============
+
+  /relationships/path:
+    get:
+      summary: Find paths between two entities
+      tags: [Relationships]
+      operationId: findPaths
+      parameters:
+        - name: from_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: to_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: max_hops
+          in: query
+          schema:
+            type: integer
+            default: 3
+            maximum: 5
+        - name: rel_types
+          in: query
+          description: Comma-separated relationship types to traverse
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Paths found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PathsResponse'
+
+  /relationships/funding-clusters:
+    get:
+      summary: Get funding clusters
+      tags: [Relationships]
+      operationId: getFundingClusters
+      description: Identify groups of outlets sharing common funders
+      parameters:
+        - name: min_shared_funders
+          in: query
+          schema:
+            type: integer
+            default: 2
+        - name: min_funding_amount
+          in: query
+          description: Minimum total funding in USD
+          schema:
+            type: number
+        - name: as_of
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Funding clusters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FundingClustersResponse'
+
+  /relationships/shared-infrastructure:
+    get:
+      summary: Get shared infrastructure relationships
+      tags: [Relationships]
+      operationId: getSharedInfrastructure
+      parameters:
+        - name: outlet_ids
+          in: query
+          description: Comma-separated outlet IDs to analyze
+          schema:
+            type: string
+        - name: vendor_type
+          in: query
+          schema:
+            $ref: '#/components/schemas/VendorType'
+      responses:
+        '200':
+          description: Shared infrastructure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SharedInfraResponse'
+
+  # ============== DETECTION ==============
+
+  /detection/temporal-coordination:
+    post:
+      summary: Analyze temporal coordination
+      tags: [Detection]
+      operationId: analyzeTemporalCoordination
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TemporalAnalysisRequest'
+      responses:
+        '200':
+          description: Coordination analysis results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemporalAnalysisResponse'
+        '202':
+          description: Analysis queued (for large datasets)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AsyncJobResponse'
+
+  /detection/composite-score:
+    post:
+      summary: Calculate composite coordination score
+      tags: [Detection]
+      operationId: calculateCompositeScore
+      description: >
+        Combines temporal, funding, and infrastructure signals.
+        No single signal can trigger a flag alone.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompositeScoreRequest'
+      responses:
+        '200':
+          description: Composite scores
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompositeScoreResponse'
+
+  /detection/explain/{finding_id}:
+    get:
+      summary: Get explanation for detection finding
+      tags: [Detection]
+      operationId: explainFinding
+      parameters:
+        - name: finding_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Explanation with evidence
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FindingExplanation'
+
+  # ============== REPORTS ==============
+
+  /reports/templates:
+    get:
+      summary: List available report templates
+      tags: [Reports]
+      operationId: listReportTemplates
+      responses:
+        '200':
+          description: Available templates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ReportTemplate'
+
+  /reports:
+    post:
+      summary: Generate a report
+      tags: [Reports]
+      operationId: generateReport
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReportRequest'
+      responses:
+        '202':
+          description: Report generation started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AsyncJobResponse'
+
+  /reports/{id}:
+    get:
+      summary: Get generated report
+      tags: [Reports]
+      operationId: getReport
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [json, html, pdf, markdown]
+            default: json
+      responses:
+        '200':
+          description: Report content
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Report'
+            text/html:
+              schema:
+                type: string
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+
+  # ============== INGESTION ==============
+
+  /ingestion/status:
+    get:
+      summary: Get ingestion pipeline status
+      tags: [Ingestion]
+      operationId: getIngestionStatus
+      responses:
+        '200':
+          description: Status of all data sources
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestionStatusResponse'
+
+  /ingestion/{source}/trigger:
+    post:
+      summary: Trigger manual ingestion for a source
+      tags: [Ingestion]
+      operationId: triggerIngestion
+      parameters:
+        - name: source
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [irs990, cra, opencorporates, meta_ads]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IngestionTriggerRequest'
+      responses:
+        '202':
+          description: Ingestion started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AsyncJobResponse'
+
+  # ============== ASYNC JOBS ==============
+
+  /jobs/{id}:
+    get:
+      summary: Get async job status
+      tags: [Ingestion, Detection, Reports]
+      operationId: getJobStatus
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Job status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobStatus'
+
+components:
+  schemas:
+    # ============== ENUMS ==============
+
+    EntityType:
+      type: string
+      enum: [PERSON, ORGANIZATION, OUTLET, DOMAIN, PLATFORM_ACCOUNT, SPONSOR, VENDOR]
+
+    RelationshipType:
+      type: string
+      enum: [FUNDED_BY, DIRECTOR_OF, EMPLOYED_BY, SPONSORED_BY, OWNS, CITED, AMPLIFIED, SHARED_INFRA]
+
+    VendorType:
+      type: string
+      enum: [hosting, analytics, ad_network, cdn, dns, legal, pr, consulting, other]
+
+    OrgType:
+      type: string
+      enum: [nonprofit, corporation, foundation, political_org, unknown]
+
+    # ============== ENTITIES ==============
+
+    Entity:
+      type: object
+      required: [id, entity_type, name, created_at, confidence]
+      properties:
+        id:
+          type: string
+          format: uuid
+        entity_type:
+          $ref: '#/components/schemas/EntityType'
+        name:
+          type: string
+        aliases:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        # Type-specific properties included dynamically
+        properties:
+          type: object
+          additionalProperties: true
+
+    EntitySearchResponse:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Entity'
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+
+    # ============== RELATIONSHIPS ==============
+
+    Relationship:
+      type: object
+      required: [id, rel_type, source_entity, target_entity, confidence]
+      properties:
+        id:
+          type: string
+          format: uuid
+        rel_type:
+          $ref: '#/components/schemas/RelationshipType'
+        source_entity:
+          $ref: '#/components/schemas/EntitySummary'
+        target_entity:
+          $ref: '#/components/schemas/EntitySummary'
+        valid_from:
+          type: string
+          format: date-time
+        valid_to:
+          type: string
+          format: date-time
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        properties:
+          type: object
+          additionalProperties: true
+        evidence_count:
+          type: integer
+
+    EntitySummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        entity_type:
+          $ref: '#/components/schemas/EntityType'
+        name:
+          type: string
+
+    RelationshipListResponse:
+      type: object
+      properties:
+        relationships:
+          type: array
+          items:
+            $ref: '#/components/schemas/Relationship'
+        total:
+          type: integer
+
+    PathsResponse:
+      type: object
+      properties:
+        paths:
+          type: array
+          items:
+            $ref: '#/components/schemas/Path'
+        from_entity:
+          $ref: '#/components/schemas/EntitySummary'
+        to_entity:
+          $ref: '#/components/schemas/EntitySummary'
+
+    Path:
+      type: object
+      properties:
+        hops:
+          type: integer
+        total_confidence:
+          type: number
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/EntitySummary'
+        edges:
+          type: array
+          items:
+            $ref: '#/components/schemas/Relationship'
+
+    # ============== DETECTION ==============
+
+    FundingClustersResponse:
+      type: object
+      properties:
+        clusters:
+          type: array
+          items:
+            $ref: '#/components/schemas/FundingCluster'
+
+    FundingCluster:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        outlets:
+          type: array
+          items:
+            $ref: '#/components/schemas/EntitySummary'
+        shared_funders:
+          type: array
+          items:
+            $ref: '#/components/schemas/EntitySummary'
+        total_shared_funding:
+          type: number
+        coordination_score:
+          type: number
+
+    SharedInfraResponse:
+      type: object
+      properties:
+        shared_vendors:
+          type: array
+          items:
+            $ref: '#/components/schemas/SharedVendor'
+
+    SharedVendor:
+      type: object
+      properties:
+        vendor:
+          $ref: '#/components/schemas/EntitySummary'
+        vendor_type:
+          $ref: '#/components/schemas/VendorType'
+        outlets:
+          type: array
+          items:
+            $ref: '#/components/schemas/EntitySummary'
+
+    TemporalAnalysisRequest:
+      type: object
+      required: [outlet_ids, start_date, end_date]
+      properties:
+        outlet_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        start_date:
+          type: string
+          format: date
+        end_date:
+          type: string
+          format: date
+        topic_filter:
+          type: string
+          description: Optional topic/keyword filter
+
+    TemporalAnalysisResponse:
+      type: object
+      properties:
+        finding_id:
+          type: string
+          format: uuid
+        outlet_count:
+          type: integer
+        time_range:
+          type: object
+          properties:
+            start:
+              type: string
+              format: date-time
+            end:
+              type: string
+              format: date-time
+        coordination_clusters:
+          type: array
+          items:
+            $ref: '#/components/schemas/TemporalCluster'
+        hard_negatives_filtered:
+          type: integer
+          description: Count of legitimate sync events excluded
+
+    TemporalCluster:
+      type: object
+      properties:
+        cluster_id:
+          type: string
+        outlets:
+          type: array
+          items:
+            $ref: '#/components/schemas/EntitySummary'
+        sync_score:
+          type: number
+          description: Jensen-Shannon divergence (lower = more synced)
+        burst_periods:
+          type: array
+          items:
+            type: object
+            properties:
+              start:
+                type: string
+                format: date-time
+              end:
+                type: string
+                format: date-time
+              intensity:
+                type: number
+
+    CompositeScoreRequest:
+      type: object
+      required: [outlet_ids]
+      properties:
+        outlet_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        weights:
+          type: object
+          properties:
+            temporal:
+              type: number
+              default: 0.4
+            funding:
+              type: number
+              default: 0.4
+            infrastructure:
+              type: number
+              default: 0.2
+
+    CompositeScoreResponse:
+      type: object
+      properties:
+        finding_id:
+          type: string
+          format: uuid
+        overall_score:
+          type: number
+          description: 0-1, higher = more coordinated
+        signal_breakdown:
+          type: object
+          properties:
+            temporal_score:
+              type: number
+            funding_score:
+              type: number
+            infrastructure_score:
+              type: number
+        flagged:
+          type: boolean
+          description: True only if multiple signals exceed thresholds
+        confidence_band:
+          type: object
+          properties:
+            lower:
+              type: number
+            upper:
+              type: number
+
+    FindingExplanation:
+      type: object
+      properties:
+        finding_id:
+          type: string
+          format: uuid
+        summary:
+          type: string
+          description: Non-accusatory explanation
+        contributing_factors:
+          type: array
+          items:
+            type: object
+            properties:
+              factor_type:
+                type: string
+              description:
+                type: string
+              weight:
+                type: number
+              evidence_refs:
+                type: array
+                items:
+                  $ref: '#/components/schemas/EvidenceRef'
+        confidence_statement:
+          type: string
+        limitations:
+          type: array
+          items:
+            type: string
+
+    # ============== EVIDENCE ==============
+
+    EvidenceRef:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        evidence_type:
+          type: string
+        source_url:
+          type: string
+          format: uri
+        archive_url:
+          type: string
+          format: uri
+        retrieved_at:
+          type: string
+          format: date-time
+
+    EvidenceListResponse:
+      type: object
+      properties:
+        evidence:
+          type: array
+          items:
+            $ref: '#/components/schemas/EvidenceRef'
+
+    # ============== REPORTS ==============
+
+    ReportTemplate:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        required_inputs:
+          type: array
+          items:
+            type: string
+
+    ReportRequest:
+      type: object
+      required: [template_id]
+      properties:
+        template_id:
+          type: string
+          enum: [structural_risk, influence_topology, timeline_narrative]
+        entity_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        time_range:
+          type: object
+          properties:
+            start:
+              type: string
+              format: date
+            end:
+              type: string
+              format: date
+        options:
+          type: object
+          additionalProperties: true
+
+    Report:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        template_id:
+          type: string
+        generated_at:
+          type: string
+          format: date-time
+        title:
+          type: string
+        executive_summary:
+          type: string
+        methodology:
+          type: string
+        findings:
+          type: array
+          items:
+            type: object
+        limitations:
+          type: array
+          items:
+            type: string
+        evidence_refs:
+          type: array
+          items:
+            $ref: '#/components/schemas/EvidenceRef'
+
+    # ============== INGESTION ==============
+
+    IngestionStatusResponse:
+      type: object
+      properties:
+        sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/SourceStatus'
+
+    SourceStatus:
+      type: object
+      properties:
+        source:
+          type: string
+        status:
+          type: string
+          enum: [healthy, degraded, failed, stale]
+        last_successful_run:
+          type: string
+          format: date-time
+        next_scheduled_run:
+          type: string
+          format: date-time
+        records_count:
+          type: integer
+        last_error:
+          type: string
+
+    IngestionTriggerRequest:
+      type: object
+      properties:
+        incremental:
+          type: boolean
+          default: true
+        date_range:
+          type: object
+          properties:
+            start:
+              type: string
+              format: date
+            end:
+              type: string
+              format: date
+
+    # ============== ASYNC ==============
+
+    AsyncJobResponse:
+      type: object
+      properties:
+        job_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [queued, running, completed, failed]
+        status_url:
+          type: string
+          format: uri
+
+    JobStatus:
+      type: object
+      properties:
+        job_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [queued, running, completed, failed]
+        progress:
+          type: number
+          minimum: 0
+          maximum: 100
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        result_url:
+          type: string
+          format: uri
+        error:
+          type: string
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+security:
+  - bearerAuth: []
