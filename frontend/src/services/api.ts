@@ -57,10 +57,14 @@ export interface FundingCluster {
 
 export interface IngestionStatus {
   source: string;
-  status: 'healthy' | 'degraded' | 'failed' | 'stale' | 'disabled';
+  status: 'healthy' | 'degraded' | 'failed' | 'stale' | 'disabled' | 'never_run' | 'running';
+  last_run_id?: string;
+  last_run_status?: string;
   last_successful_run?: string;
   next_scheduled_run?: string;
-  records_count: number;
+  records_processed: number;
+  records_created: number;
+  records_updated: number;
   last_error?: string;
 }
 
@@ -159,6 +163,18 @@ export const getEntityEvidence = async (
   id: string
 ): Promise<{ evidence: Evidence[] }> => {
   const response = await apiClient.get(`/entities/${id}/evidence`);
+  return response.data;
+};
+
+export interface BoardInterlock {
+  director: EntitySummary;
+  organizations: EntitySummary[];
+}
+
+export const getEntityBoardInterlocks = async (
+  id: string
+): Promise<{ interlocks: BoardInterlock[]; total: number }> => {
+  const response = await apiClient.get(`/entities/${id}/board-interlocks`);
   return response.data;
 };
 
@@ -284,6 +300,78 @@ export const calculateCompositeScore = async (data: {
   weights?: Record<string, number>;
 }): Promise<unknown> => {
   const response = await apiClient.post('/detection/composite-score', data);
+  return response.data;
+};
+
+// Funding Cluster Detection
+export interface FundingClusterDetectionRequest {
+  entity_type?: string;
+  fiscal_year?: number;
+  min_shared_funders?: number;
+  limit?: number;
+}
+
+export interface FundingClusterDetectionResponse {
+  clusters: Array<{
+    cluster_id: string;
+    shared_funder: EntitySummary;
+    members: EntitySummary[];
+    total_funding: number;
+    funding_by_member: Record<string, number>;
+    fiscal_years: number[];
+    score: number;
+    evidence_summary: string;
+  }>;
+  total_clusters: number;
+  explanation: string;
+}
+
+export const detectFundingClusters = async (
+  data: FundingClusterDetectionRequest
+): Promise<FundingClusterDetectionResponse> => {
+  const response = await apiClient.post('/detection/funding-clusters', data);
+  return response.data;
+};
+
+// Infrastructure Sharing Detection
+export interface InfrastructureSharingRequest {
+  entity_ids?: string[];
+  domains?: string[];
+  min_score?: number;
+}
+
+export interface InfrastructureSharingResponse {
+  profiles: Array<{
+    domain: string;
+    dns?: { nameservers: string[]; a_records: string[] };
+    whois?: { registrar: string | null; registrant_org: string | null };
+    hosting?: Array<{ ip: string; provider: string | null; asn: string | null }>;
+    analytics?: { google_analytics: string[]; google_tag_manager: string[] };
+    ssl?: { issuer: string | null; san_count: number };
+    error?: string;
+  }>;
+  matches: Array<{
+    domain_a: string;
+    domain_b: string;
+    signals: Array<{
+      signal_type: string;
+      value: string;
+      weight: number;
+      description: string;
+    }>;
+    total_score: number;
+    confidence: number;
+  }>;
+  total_matches: number;
+  domains_scanned: number;
+  errors: string[];
+  explanation: string;
+}
+
+export const detectInfrastructureSharing = async (
+  data: InfrastructureSharingRequest
+): Promise<InfrastructureSharingResponse> => {
+  const response = await apiClient.post('/detection/infrastructure-sharing', data);
   return response.data;
 };
 

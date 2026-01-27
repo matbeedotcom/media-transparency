@@ -295,6 +295,149 @@ def queue_stats():
         sys.exit(1)
 
 
+@cli.command(name="run")
+@click.option(
+    "--entity-type",
+    type=click.Choice(["Organization", "Person", "Outlet", "all"]),
+    default="all",
+    help="Entity type to resolve",
+)
+@click.option(
+    "--auto-merge-threshold",
+    type=float,
+    default=0.95,
+    help="Confidence threshold for automatic merging (default: 0.95)",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Find candidates without merging",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Show detailed output",
+)
+def run_resolution(
+    entity_type: str,
+    auto_merge_threshold: float,
+    dry_run: bool,
+    verbose: bool,
+):
+    """Run entity resolution across all entities.
+
+    Finds potential duplicates using deterministic and fuzzy matching,
+    then either auto-merges high-confidence matches or queues them
+    for human review.
+
+    Examples:
+
+        # Dry run to see candidates
+        mitds resolve run --dry-run --verbose
+
+        # Run resolution for organizations only
+        mitds resolve run --entity-type Organization
+
+        # Lower auto-merge threshold
+        mitds resolve run --auto-merge-threshold 0.90
+
+        # Full run with verbose output
+        mitds resolve run --verbose
+    """
+    from ..resolution.resolver import EntityResolver
+    from ..resolution.reconcile import ReconciliationQueue
+
+    entity_types = (
+        ["Organization", "Person", "Outlet"]
+        if entity_type == "all"
+        else [entity_type]
+    )
+
+    async def _run():
+        resolver = EntityResolver(
+            auto_merge_threshold=auto_merge_threshold,
+        )
+
+        total_candidates = 0
+        total_auto_merged = 0
+        total_queued = 0
+
+        for etype in entity_types:
+            click.echo(f"\nResolving {etype} entities...")
+
+            duplicates = await resolver.find_duplicates(etype)
+
+            if not duplicates:
+                click.echo(f"  No duplicates found for {etype}")
+                continue
+
+            click.echo(f"  Found {len(duplicates)} potential duplicates")
+            total_candidates += len(duplicates)
+
+            for dup in duplicates:
+                if verbose:
+                    click.echo(
+                        f"    {dup.source_id} <-> {dup.target_id} "
+                        f"(confidence: {dup.confidence:.2f}, "
+                        f"strategy: {dup.strategy.value if dup.strategy else 'unknown'})"
+                    )
+
+                if dry_run:
+                    continue
+
+                if dup.confidence >= auto_merge_threshold:
+                    # Auto-merge
+                    merged = await resolver.merge_entities(
+                        dup.source_id,
+                        dup.target_id,
+                        user_id="system:auto-resolve",
+                    )
+                    if merged:
+                        total_auto_merged += 1
+                        if verbose:
+                            click.echo(
+                                f"      -> Auto-merged (confidence: {dup.confidence:.2f})"
+                            )
+                else:
+                    # Queue for review
+                    queue = ReconciliationQueue()
+                    await queue.create_task(
+                        source_entity_id=dup.source_id,
+                        candidate_entity_id=dup.target_id,
+                        match_confidence=dup.confidence,
+                        match_strategy=dup.strategy,
+                        match_details=dup.match_details,
+                    )
+                    total_queued += 1
+                    if verbose:
+                        click.echo(
+                            f"      -> Queued for review (confidence: {dup.confidence:.2f})"
+                        )
+
+        return total_candidates, total_auto_merged, total_queued
+
+    try:
+        candidates, merged, queued = asyncio.run(_run())
+
+        click.echo("\n" + "=" * 50)
+        click.echo("Resolution Summary")
+        click.echo("=" * 50)
+        click.echo(f"  Candidates found: {candidates}")
+        if not dry_run:
+            click.echo(f"  Auto-merged: {merged}")
+            click.echo(f"  Queued for review: {queued}")
+        else:
+            click.echo("  (dry run - no changes made)")
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        if verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
 @cli.command(name="match")
 @click.option(
     "--source-id",

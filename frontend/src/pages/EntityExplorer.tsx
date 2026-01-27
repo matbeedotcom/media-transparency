@@ -11,13 +11,15 @@ import {
   searchEntities,
   getEntity,
   getEntityRelationships,
+  getEntityBoardInterlocks,
   type Entity,
   type Relationship,
+  type BoardInterlock,
 } from '../services/api';
 import { EntityGraph, InfrastructureOverlap } from '../components/graph';
 import { EvidencePanel } from '../components/evidence';
 
-type ViewMode = 'detail' | 'graph' | 'evidence' | 'infrastructure';
+type ViewMode = 'detail' | 'graph' | 'evidence' | 'infrastructure' | 'interlocks';
 
 export default function EntityExplorer() {
   const { id } = useParams();
@@ -69,6 +71,13 @@ export default function EntityExplorer() {
     queryKey: ['entity-relationships-list', id],
     queryFn: () => getEntityRelationships(id!, { direction: 'both' }),
     enabled: !!id && viewMode === 'detail',
+  });
+
+  // Get board interlocks
+  const { data: interlockData, isLoading: interlocksLoading } = useQuery({
+    queryKey: ['entity-interlocks', id],
+    queryFn: () => getEntityBoardInterlocks(id!),
+    enabled: !!id && viewMode === 'interlocks',
   });
 
   const handleSearch = (e: React.FormEvent) => {
@@ -235,6 +244,15 @@ export default function EntityExplorer() {
               >
                 Infrastructure
               </button>
+              {selectedEntity?.entity_type === 'ORGANIZATION' && (
+                <button
+                  type="button"
+                  className={`tab ${viewMode === 'interlocks' ? 'active' : ''}`}
+                  onClick={() => setViewMode('interlocks')}
+                >
+                  Board Interlocks
+                </button>
+              )}
             </div>
           )}
 
@@ -300,7 +318,7 @@ export default function EntityExplorer() {
                     <ul className="relationship-list">
                       {relationships.relationships.slice(0, 5).map((rel) => (
                         <li key={rel.id} className="relationship-item">
-                          <span className="rel-type-badge">{rel.rel_type}</span>
+                          <span className="rel-type-badge" data-type={rel.rel_type}>{rel.rel_type}</span>
                           <span className="rel-direction">
                             {rel.source_entity.id === id ? '→' : '←'}
                           </span>
@@ -414,6 +432,24 @@ export default function EntityExplorer() {
                           <dd>{selectedRelationship.evidence_count} sources</dd>
                         </>
                       )}
+                      {selectedRelationship.properties?.ownership_percentage != null && (
+                        <>
+                          <dt>Ownership</dt>
+                          <dd>{String(selectedRelationship.properties.ownership_percentage)}%</dd>
+                        </>
+                      )}
+                      {selectedRelationship.properties?.form_type != null && (
+                        <>
+                          <dt>Filing</dt>
+                          <dd>{String(selectedRelationship.properties.form_type)}</dd>
+                        </>
+                      )}
+                      {selectedRelationship.properties?.filing_date != null && (
+                        <>
+                          <dt>Filed</dt>
+                          <dd>{String(selectedRelationship.properties.filing_date)}</dd>
+                        </>
+                      )}
                     </dl>
                   </div>
                 )}
@@ -432,6 +468,62 @@ export default function EntityExplorer() {
                   }
                   height="500px"
                 />
+              </div>
+            ) : viewMode === 'interlocks' && id ? (
+              <div className="interlocks-view">
+                {interlocksLoading ? (
+                  <div className="loading">
+                    <div className="spinner" />
+                    <span>Loading board interlocks...</span>
+                  </div>
+                ) : interlockData?.interlocks && interlockData.interlocks.length > 0 ? (
+                  <>
+                    <h3 className="interlocks-title">
+                      Shared Directors ({interlockData.total})
+                    </h3>
+                    <p className="interlocks-description">
+                      Directors of this organization who also serve on other boards.
+                    </p>
+                    <ul className="interlocks-list">
+                      {interlockData.interlocks.map((interlock: BoardInterlock) => (
+                        <li key={interlock.director.id} className="interlock-item">
+                          <div className="interlock-director">
+                            <span className="entity-type-badge">PERSON</span>
+                            <a
+                              href={`/entities/${interlock.director.id}`}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                handleEntitySelect(interlock.director.id);
+                              }}
+                            >
+                              {interlock.director.name}
+                            </a>
+                          </div>
+                          <div className="interlock-orgs">
+                            <span className="interlock-orgs-label">Also directs:</span>
+                            {interlock.organizations.map((org) => (
+                              <a
+                                key={org.id}
+                                href={`/entities/${org.id}`}
+                                className="interlock-org-link"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  handleEntitySelect(org.id);
+                                }}
+                              >
+                                {org.name}
+                              </a>
+                            ))}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                ) : (
+                  <div className="empty-state">
+                    <p>No board interlocks found for this organization.</p>
+                  </div>
+                )}
               </div>
             ) : null}
           </div>
@@ -637,6 +729,26 @@ export default function EntityExplorer() {
           text-transform: uppercase;
         }
 
+        .rel-type-badge[data-type="OWNS"] {
+          background-color: #E11D48;
+          color: white;
+        }
+
+        .rel-type-badge[data-type="FUNDED_BY"] {
+          background-color: #10B981;
+          color: white;
+        }
+
+        .rel-type-badge[data-type="DIRECTOR_OF"] {
+          background-color: #8B5CF6;
+          color: white;
+        }
+
+        .rel-type-badge[data-type="EMPLOYED_BY"] {
+          background-color: #3B82F6;
+          color: white;
+        }
+
         .rel-direction {
           color: var(--text-muted);
         }
@@ -742,6 +854,79 @@ export default function EntityExplorer() {
 
         .infrastructure-view {
           padding: var(--spacing-sm);
+        }
+
+        .interlocks-view {
+          padding: var(--spacing-sm);
+        }
+
+        .interlocks-title {
+          margin-bottom: var(--spacing-xs);
+        }
+
+        .interlocks-description {
+          font-size: 0.875rem;
+          color: var(--text-muted);
+          margin-bottom: var(--spacing-md);
+        }
+
+        .interlocks-list {
+          list-style: none;
+          margin: 0;
+          padding: 0;
+          display: flex;
+          flex-direction: column;
+          gap: var(--spacing-sm);
+        }
+
+        .interlock-item {
+          padding: var(--spacing-md);
+          border: 1px solid var(--border-color);
+          border-radius: var(--border-radius);
+          background: var(--bg-secondary);
+        }
+
+        .interlock-director {
+          display: flex;
+          align-items: center;
+          gap: var(--spacing-sm);
+          margin-bottom: var(--spacing-sm);
+          font-weight: 500;
+        }
+
+        .interlock-director a {
+          color: var(--color-primary);
+          text-decoration: none;
+        }
+
+        .interlock-director a:hover {
+          text-decoration: underline;
+        }
+
+        .interlock-orgs {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          gap: var(--spacing-xs);
+          font-size: 0.875rem;
+        }
+
+        .interlock-orgs-label {
+          color: var(--text-muted);
+        }
+
+        .interlock-org-link {
+          padding: 2px 8px;
+          border-radius: 4px;
+          background: var(--bg-tertiary);
+          color: var(--color-primary);
+          text-decoration: none;
+          font-size: 0.8125rem;
+        }
+
+        .interlock-org-link:hover {
+          background: var(--color-primary);
+          color: white;
         }
 
         .btn-text {

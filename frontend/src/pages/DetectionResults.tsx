@@ -10,7 +10,14 @@
 import { useState, useCallback } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import Timeline, { TimelineEvent, BurstPeriod } from '../components/graph/Timeline';
-import { searchEntities, type EntitySummary } from '../services/api';
+import {
+  searchEntities,
+  detectFundingClusters,
+  detectInfrastructureSharing,
+  type EntitySummary,
+  type FundingClusterDetectionResponse,
+  type InfrastructureSharingResponse,
+} from '../services/api';
 
 // API Types
 interface TemporalAnalysisRequest {
@@ -98,6 +105,17 @@ export default function DetectionResults() {
   const [excludeHardNegatives, setExcludeHardNegatives] = useState(true);
   const [analysisResult, setAnalysisResult] = useState<TemporalAnalysisResponse | null>(null);
 
+  // Funding cluster form state
+  const [fundingEntityType, setFundingEntityType] = useState<string>('');
+  const [fundingFiscalYear, setFundingFiscalYear] = useState<number>(new Date().getFullYear() - 1);
+  const [fundingMinShared, setFundingMinShared] = useState<number>(2);
+  const [fundingResult, setFundingResult] = useState<FundingClusterDetectionResponse | null>(null);
+
+  // Infrastructure sharing form state
+  const [infraDomains, setInfraDomains] = useState<string>('');
+  const [infraMinScore, setInfraMinScore] = useState<number>(1.0);
+  const [infraResult, setInfraResult] = useState<InfrastructureSharingResponse | null>(null);
+
   // Entity search
   const { data: searchResults, isLoading: isSearching } = useQuery({
     queryKey: ['entity-search', searchQuery],
@@ -112,6 +130,43 @@ export default function DetectionResults() {
       setAnalysisResult(data);
     },
   });
+
+  // Funding cluster mutation
+  const fundingAnalysis = useMutation({
+    mutationFn: detectFundingClusters,
+    onSuccess: (data) => {
+      setFundingResult(data);
+    },
+  });
+
+  // Infrastructure sharing mutation
+  const infraAnalysis = useMutation({
+    mutationFn: detectInfrastructureSharing,
+    onSuccess: (data) => {
+      setInfraResult(data);
+    },
+  });
+
+  const handleRunFunding = useCallback(() => {
+    fundingAnalysis.mutate({
+      entity_type: fundingEntityType || undefined,
+      fiscal_year: fundingFiscalYear || undefined,
+      min_shared_funders: fundingMinShared,
+      limit: 50,
+    });
+  }, [fundingEntityType, fundingFiscalYear, fundingMinShared, fundingAnalysis]);
+
+  const handleRunInfra = useCallback(() => {
+    const domains = infraDomains.split(/[,\s]+/).filter(Boolean);
+    if (domains.length < 2) {
+      alert('Please enter at least 2 domains separated by commas');
+      return;
+    }
+    infraAnalysis.mutate({
+      domains,
+      min_score: infraMinScore,
+    });
+  }, [infraDomains, infraMinScore, infraAnalysis]);
 
   const handleAddEntity = (entity: EntitySummary) => {
     if (!selectedEntities.find((e) => e.id === entity.id)) {
@@ -441,37 +496,123 @@ export default function DetectionResults() {
           <div className="card">
             <h2>Funding Cluster Detection</h2>
             <p className="text-muted mb-md">
-              Identify groups of outlets that share common funders, indicating
+              Identify groups of entities that share common funders, indicating
               potential coordinated influence.
             </p>
 
-            <form className="analysis-form">
+            <form className="analysis-form" onSubmit={(e) => { e.preventDefault(); handleRunFunding(); }}>
               <div className="form-row">
                 <div className="form-group">
-                  <label>Minimum Shared Funders</label>
-                  <input type="number" min="1" defaultValue="2" />
+                  <label>Entity Type</label>
+                  <select
+                    value={fundingEntityType}
+                    onChange={(e) => setFundingEntityType(e.target.value)}
+                  >
+                    <option value="">All Types</option>
+                    <option value="Organization">Organization</option>
+                    <option value="Outlet">Outlet</option>
+                    <option value="Person">Person</option>
+                  </select>
                 </div>
                 <div className="form-group">
-                  <label>Minimum Funding (USD)</label>
-                  <input type="number" min="0" placeholder="Optional" />
+                  <label>Fiscal Year</label>
+                  <input
+                    type="number"
+                    min="2000"
+                    max="2030"
+                    value={fundingFiscalYear}
+                    onChange={(e) => setFundingFiscalYear(parseInt(e.target.value) || 0)}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Min Shared Funders</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={fundingMinShared}
+                    onChange={(e) => setFundingMinShared(parseInt(e.target.value) || 2)}
+                  />
                 </div>
               </div>
 
-              <button type="submit" className="btn btn-primary" disabled>
-                Find Clusters
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={fundingAnalysis.isPending}
+              >
+                {fundingAnalysis.isPending ? 'Detecting...' : 'Find Clusters'}
               </button>
+
+              {fundingAnalysis.isError && (
+                <div className="error-message">
+                  Error: {(fundingAnalysis.error as Error).message}
+                </div>
+              )}
             </form>
           </div>
 
-          <div className="card mt-md">
-            <h3>Funding Clusters</h3>
-            <div className="empty-state">
-              <p>Use the Funding Clusters panel in Relationships API.</p>
-              <p className="text-muted">
-                Navigate to Relationships to explore funding cluster detection.
-              </p>
+          {fundingResult && (
+            <div className="card mt-md">
+              <h3>Funding Clusters ({fundingResult.total_clusters})</h3>
+              <p className="explanation">{fundingResult.explanation}</p>
+
+              {fundingResult.clusters.length > 0 ? (
+                <div className="results-section">
+                  <table className="results-table">
+                    <thead>
+                      <tr>
+                        <th>Shared Funder</th>
+                        <th>Members</th>
+                        <th>Total Funding</th>
+                        <th>Score</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {fundingResult.clusters.map((cluster) => (
+                        <tr key={cluster.cluster_id}>
+                          <td>{cluster.shared_funder?.name || 'Unknown'}</td>
+                          <td>
+                            <div className="selected-entities">
+                              {cluster.members.map((m, i) => (
+                                <span key={i} className="entity-chip small">
+                                  {m.name || 'Unknown'}
+                                </span>
+                              ))}
+                            </div>
+                          </td>
+                          <td>${cluster.total_funding.toLocaleString()}</td>
+                          <td>
+                            <span
+                              className="stat-value"
+                              style={{ color: getScoreColor(cluster.score), fontSize: '1rem' }}
+                            >
+                              {(cluster.score * 100).toFixed(1)}%
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="empty-state">
+                  <p>No funding clusters found matching the criteria.</p>
+                </div>
+              )}
             </div>
-          </div>
+          )}
+
+          {!fundingResult && !fundingAnalysis.isPending && (
+            <div className="card mt-md">
+              <h3>Funding Clusters</h3>
+              <div className="empty-state">
+                <p>No results yet.</p>
+                <p className="text-muted">
+                  Configure and run a funding cluster search above.
+                </p>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -482,45 +623,174 @@ export default function DetectionResults() {
             <h2>Infrastructure Sharing Analysis</h2>
             <p className="text-muted mb-md">
               Detect outlets sharing technical infrastructure (hosting, analytics,
-              CDN) even when organizational links are hidden.
+              DNS, SSL) even when organizational links are hidden.
             </p>
 
-            <form className="analysis-form">
+            <form className="analysis-form" onSubmit={(e) => { e.preventDefault(); handleRunInfra(); }}>
               <div className="form-group">
-                <label>Outlets to Analyze</label>
+                <label>Domains to Analyze</label>
                 <input
                   type="text"
-                  placeholder="Enter outlet IDs or leave empty for all..."
-                  disabled
+                  value={infraDomains}
+                  onChange={(e) => setInfraDomains(e.target.value)}
+                  placeholder="example1.com, example2.com, example3.com"
                 />
+                <small className="text-muted">
+                  Enter at least 2 domains separated by commas
+                </small>
               </div>
 
-              <div className="form-group">
-                <label>Vendor Type Filter</label>
-                <select disabled>
-                  <option value="">All Types</option>
-                  <option value="hosting">Hosting</option>
-                  <option value="analytics">Analytics</option>
-                  <option value="cdn">CDN</option>
-                  <option value="dns">DNS</option>
-                </select>
+              <div className="form-row">
+                <div className="form-group">
+                  <label>Minimum Match Score</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    value={infraMinScore}
+                    onChange={(e) => setInfraMinScore(parseFloat(e.target.value) || 1.0)}
+                  />
+                </div>
               </div>
 
-              <button type="submit" className="btn btn-primary" disabled>
-                Analyze Infrastructure
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={infraAnalysis.isPending}
+              >
+                {infraAnalysis.isPending ? 'Scanning...' : 'Analyze Infrastructure'}
               </button>
+
+              {infraAnalysis.isError && (
+                <div className="error-message">
+                  Error: {(infraAnalysis.error as Error).message}
+                </div>
+              )}
             </form>
           </div>
 
-          <div className="card mt-md">
-            <h3>Shared Infrastructure</h3>
-            <div className="empty-state">
-              <p>Infrastructure detection will be implemented in Phase 6.</p>
-              <p className="text-muted">
-                This feature detects shared technical infrastructure patterns.
-              </p>
+          {infraResult && (
+            <div className="card mt-md">
+              <h3>Infrastructure Results</h3>
+              <p className="explanation">{infraResult.explanation}</p>
+
+              {infraResult.errors.length > 0 && (
+                <div className="error-message" style={{ marginTop: 'var(--spacing-sm)' }}>
+                  {infraResult.errors.map((err, i) => (
+                    <div key={i}>{err}</div>
+                  ))}
+                </div>
+              )}
+
+              <div className="results-summary">
+                <div className="summary-stat">
+                  <div className="stat-value">{infraResult.domains_scanned}</div>
+                  <div className="stat-label">Domains Scanned</div>
+                </div>
+                <div className="summary-stat">
+                  <div className="stat-value">{infraResult.total_matches}</div>
+                  <div className="stat-label">Matches Found</div>
+                </div>
+              </div>
+
+              {/* Pairwise Matches */}
+              {infraResult.matches.length > 0 && (
+                <div className="results-section">
+                  <h4>Pairwise Matches</h4>
+                  <table className="results-table">
+                    <thead>
+                      <tr>
+                        <th>Domain A</th>
+                        <th>Domain B</th>
+                        <th>Signals</th>
+                        <th>Score</th>
+                        <th>Confidence</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {infraResult.matches.map((match, i) => (
+                        <tr key={i}>
+                          <td>{match.domain_a}</td>
+                          <td>{match.domain_b}</td>
+                          <td>
+                            <div className="selected-entities">
+                              {match.signals.map((sig, j) => (
+                                <span
+                                  key={j}
+                                  className="entity-chip small"
+                                  title={sig.description}
+                                  style={{
+                                    background: sig.weight >= 3 ? '#DC2626' : sig.weight >= 2 ? '#F59E0B' : 'var(--color-primary)',
+                                  }}
+                                >
+                                  {sig.signal_type}: {sig.value}
+                                </span>
+                              ))}
+                            </div>
+                          </td>
+                          <td>{match.total_score.toFixed(1)}</td>
+                          <td>{(match.confidence * 100).toFixed(0)}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* Domain Profiles */}
+              {infraResult.profiles.length > 0 && (
+                <div className="results-section">
+                  <h4>Domain Profiles</h4>
+                  {infraResult.profiles.map((profile, i) => (
+                    <div key={i} className="sync-group-card">
+                      <div className="sync-score">
+                        <strong>{profile.domain}</strong>
+                        {profile.error && (
+                          <span className="badge badge-warning" style={{ marginLeft: '8px' }}>
+                            Error: {profile.error}
+                          </span>
+                        )}
+                      </div>
+                      <div className="sync-details">
+                        {profile.dns && (
+                          <span>NS: {profile.dns.nameservers?.join(', ') || 'N/A'}</span>
+                        )}
+                        {profile.whois?.registrar && (
+                          <span>Registrar: {profile.whois.registrar}</span>
+                        )}
+                        {profile.ssl?.issuer && (
+                          <span>SSL: {profile.ssl.issuer}</span>
+                        )}
+                        {profile.hosting && profile.hosting.length > 0 && (
+                          <span>
+                            Hosting: {profile.hosting.map((h) => h.provider || h.ip).join(', ')}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {infraResult.matches.length === 0 && (
+                <div className="empty-state">
+                  <p>No shared infrastructure detected above the minimum score.</p>
+                </div>
+              )}
             </div>
-          </div>
+          )}
+
+          {!infraResult && !infraAnalysis.isPending && (
+            <div className="card mt-md">
+              <h3>Shared Infrastructure</h3>
+              <div className="empty-state">
+                <p>No results yet.</p>
+                <p className="text-muted">
+                  Enter domains above to scan for shared infrastructure.
+                </p>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

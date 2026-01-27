@@ -1,0 +1,60 @@
+# Git
+.git/
+.gitignore
+
+# Documentation
+*.md
+!README.md
+docs/
+specs/
+
+# Dependencies (rebuild in container)
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# IDE / Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+coverage/
+.nyc_output/
+tests/
+
+# Environment files
+.env
+.env.*
+*.pem
+*.key
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local data
+data/
+.minio/
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.docker/

@@ -87,7 +87,7 @@ interface ReportRequest {
 // =========================
 
 async function fetchTemplates(): Promise<ReportTemplate[]> {
-  const response = await fetch('/api/reports/templates');
+  const response = await fetch('/api/v1/reports/templates');
   if (!response.ok) {
     throw new Error('Failed to fetch templates');
   }
@@ -96,7 +96,7 @@ async function fetchTemplates(): Promise<ReportTemplate[]> {
 
 async function searchEntities(query: string): Promise<EntitySearchResult[]> {
   if (!query || query.length < 2) return [];
-  const response = await fetch(`/api/entities?query=${encodeURIComponent(query)}&limit=10`);
+  const response = await fetch(`/api/v1/entities?query=${encodeURIComponent(query)}&limit=10`);
   if (!response.ok) {
     throw new Error('Failed to search entities');
   }
@@ -105,7 +105,7 @@ async function searchEntities(query: string): Promise<EntitySearchResult[]> {
 }
 
 async function generateReport(request: ReportRequest): Promise<{ report_id: string; status: string; status_url: string }> {
-  const response = await fetch('/api/reports', {
+  const response = await fetch('/api/v1/reports', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
@@ -118,7 +118,7 @@ async function generateReport(request: ReportRequest): Promise<{ report_id: stri
 }
 
 async function fetchReport(reportId: string, format: string = 'json'): Promise<ReportRecord> {
-  const response = await fetch(`/api/reports/${reportId}?format=${format}`);
+  const response = await fetch(`/api/v1/reports/${reportId}?format=${format}`);
   if (!response.ok) {
     throw new Error('Failed to fetch report');
   }
@@ -126,7 +126,7 @@ async function fetchReport(reportId: string, format: string = 'json'): Promise<R
 }
 
 async function fetchReportStatus(reportId: string): Promise<{ id: string; status: string; error?: string }> {
-  const response = await fetch(`/api/reports/${reportId}/status`);
+  const response = await fetch(`/api/v1/reports/${reportId}/status`);
   if (!response.ok) {
     throw new Error('Failed to fetch report status');
   }

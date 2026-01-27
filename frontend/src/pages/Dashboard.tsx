@@ -4,8 +4,8 @@
  * Shows system overview, recent activity, and key metrics.
  */
 
-import { useQuery } from '@tanstack/react-query';
-import { getIngestionStatus, type IngestionStatus } from '../services/api';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { getIngestionStatus, searchEntities, triggerIngestion, type IngestionStatus } from '../services/api';
 
 export default function Dashboard() {
   const { data: ingestionData, isLoading: ingestionLoading } = useQuery({
@@ -14,10 +14,48 @@ export default function Dashboard() {
     refetchInterval: 60000, // Refresh every minute
   });
 
+  // Fetch entity counts by type
+  const { data: orgData } = useQuery({
+    queryKey: ['entity-count', 'ORGANIZATION'],
+    queryFn: () => searchEntities({ type: 'ORGANIZATION', limit: 1 }),
+  });
+
+  const { data: personData } = useQuery({
+    queryKey: ['entity-count', 'PERSON'],
+    queryFn: () => searchEntities({ type: 'PERSON', limit: 1 }),
+  });
+
+  const { data: outletData } = useQuery({
+    queryKey: ['entity-count', 'OUTLET'],
+    queryFn: () => searchEntities({ type: 'OUTLET', limit: 1 }),
+  });
+
+  const { data: allData } = useQuery({
+    queryKey: ['entity-count', 'ALL'],
+    queryFn: () => searchEntities({ limit: 1 }),
+  });
+
+  const queryClient = useQueryClient();
+
+  const triggerMutation = useMutation({
+    mutationFn: (source: string) => triggerIngestion(source),
+    onSuccess: () => {
+      // Refetch ingestion status after triggering
+      queryClient.invalidateQueries({ queryKey: ['ingestion-status'] });
+    },
+  });
+
+  const handleTrigger = (source: string) => {
+    if (triggerMutation.isPending) return;
+    triggerMutation.mutate(source);
+  };
+
   const getStatusColor = (status: IngestionStatus['status']) => {
     switch (status) {
       case 'healthy':
         return 'text-success';
+      case 'running':
+        return 'text-primary';
       case 'degraded':
         return 'text-warning';
       case 'failed':
@@ -25,6 +63,8 @@ export default function Dashboard() {
       case 'stale':
         return 'text-warning';
       case 'disabled':
+        return 'text-muted';
+      case 'never_run':
         return 'text-muted';
       default:
         return 'text-muted';
@@ -35,6 +75,8 @@ export default function Dashboard() {
     switch (status) {
       case 'healthy':
         return '✅';
+      case 'running':
+        return '🔄';
       case 'degraded':
         return '⚠️';
       case 'failed':
@@ -43,6 +85,8 @@ export default function Dashboard() {
         return '⏰';
       case 'disabled':
         return '⏸️';
+      case 'never_run':
+        return '🆕';
       default:
         return '❓';
     }
@@ -60,29 +104,29 @@ export default function Dashboard() {
         <div className="card stat-card">
           <div className="stat-icon">🏢</div>
           <div className="stat-content">
-            <div className="stat-value">0</div>
+            <div className="stat-value">{(orgData?.total ?? 0).toLocaleString()}</div>
             <div className="stat-label">Organizations</div>
           </div>
         </div>
         <div className="card stat-card">
           <div className="stat-icon">👤</div>
           <div className="stat-content">
-            <div className="stat-value">0</div>
+            <div className="stat-value">{(personData?.total ?? 0).toLocaleString()}</div>
             <div className="stat-label">Persons</div>
           </div>
         </div>
         <div className="card stat-card">
           <div className="stat-icon">📰</div>
           <div className="stat-content">
-            <div className="stat-value">0</div>
+            <div className="stat-value">{(outletData?.total ?? 0).toLocaleString()}</div>
             <div className="stat-label">Outlets</div>
           </div>
         </div>
         <div className="card stat-card">
           <div className="stat-icon">🔗</div>
           <div className="stat-content">
-            <div className="stat-value">0</div>
-            <div className="stat-label">Relationships</div>
+            <div className="stat-value">{(allData?.total ?? 0).toLocaleString()}</div>
+            <div className="stat-label">Total Entities</div>
           </div>
         </div>
       </div>
@@ -121,13 +165,14 @@ export default function Dashboard() {
                         ? new Date(source.last_successful_run).toLocaleString()
                         : 'Never'}
                     </td>
-                    <td>{source.records_count.toLocaleString()}</td>
+                    <td>{(source.records_processed ?? 0).toLocaleString()}</td>
                     <td>
                       <button
                         className="btn btn-secondary"
-                        disabled={source.status === 'disabled'}
+                        disabled={source.status === 'disabled' || source.status === 'running' || triggerMutation.isPending}
+                        onClick={() => handleTrigger(source.source)}
                       >
-                        Trigger
+                        {source.status === 'running' ? 'Running...' : triggerMutation.isPending ? 'Starting...' : 'Trigger'}
                       </button>
                     </td>
                   </tr>

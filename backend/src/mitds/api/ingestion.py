@@ -81,7 +81,12 @@ async def get_ingestion_status(
 
         sources_status = []
 
-        for source_name in ["irs990", "cra", "opencorporates", "meta_ads"]:
+        # Sources that are enabled (free, no API key required)
+        enabled_sources = ["irs990", "cra", "sec_edgar", "canada_corps"]
+        # Sources that require API keys
+        disabled_sources = ["opencorporates", "meta_ads"]
+
+        for source_name in enabled_sources + disabled_sources:
             run = run_by_source.get(source_name)
 
             if run:
@@ -106,7 +111,7 @@ async def get_ingestion_status(
                 # No runs yet
                 sources_status.append({
                     "source": source_name,
-                    "status": "never_run" if source_name in ["irs990", "cra"] else "disabled",
+                    "status": "never_run" if source_name in enabled_sources else "disabled",
                     "last_run_id": None,
                     "last_run_status": None,
                     "last_successful_run": None,
@@ -258,6 +263,8 @@ async def _run_ingestion_task(
 ):
     """Background task to run ingestion."""
     from ..ingestion import run_irs990_ingestion, run_cra_ingestion
+    from ..ingestion.edgar import run_sec_edgar_ingestion
+    from ..ingestion.canada_corps import run_canada_corps_ingestion
 
     try:
         if source == "irs990":
@@ -270,6 +277,14 @@ async def _run_ingestion_task(
         elif source == "cra":
             result = await run_cra_ingestion(
                 incremental=request.incremental,
+                limit=request.limit,
+            )
+        elif source == "sec_edgar":
+            result = await run_sec_edgar_ingestion(
+                limit=request.limit,
+            )
+        elif source == "canada_corps":
+            result = await run_canada_corps_ingestion(
                 limit=request.limit,
             )
         else:
@@ -335,7 +350,7 @@ async def trigger_ingestion(
     source: str,
     background_tasks: BackgroundTasks,
     request: IngestionTriggerRequest | None = None,
-    user: CurrentUser = None,
+    user: OptionalUser = None,
 ) -> dict[str, Any]:
     """Trigger manual ingestion for a source.
 
@@ -349,7 +364,7 @@ async def trigger_ingestion(
     Returns:
         Job ID and status URL for tracking
     """
-    valid_sources = ["irs990", "cra", "opencorporates", "meta_ads"]
+    valid_sources = ["irs990", "cra", "sec_edgar", "canada_corps", "opencorporates", "meta_ads"]
 
     if source not in valid_sources:
         raise ValidationError(
@@ -359,7 +374,7 @@ async def trigger_ingestion(
     if source in ["opencorporates", "meta_ads"]:
         raise HTTPException(
             status_code=501,
-            detail=f"Source '{source}' is not yet implemented"
+            detail=f"Source '{source}' requires API key configuration"
         )
 
     if request is None:

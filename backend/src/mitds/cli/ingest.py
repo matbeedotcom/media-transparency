@@ -286,6 +286,169 @@ def ingest_opencorporates(
         sys.exit(1)
 
 
+@cli.command(name="sec-edgar")
+@click.option(
+    "--incremental/--full",
+    default=True,
+    help="Incremental or full sync (default: incremental)",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum number of companies to process",
+)
+@click.option(
+    "--with-ownership/--no-ownership",
+    default=True,
+    help="Parse 13D/13G ownership filings (default: enabled)",
+)
+@click.option(
+    "--with-insiders/--no-insiders",
+    default=True,
+    help="Parse Form 4 insider transaction filings (default: enabled)",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Enable verbose output",
+)
+def ingest_sec_edgar(
+    incremental: bool,
+    limit: int | None,
+    with_ownership: bool,
+    with_insiders: bool,
+    verbose: bool,
+):
+    """Ingest SEC EDGAR company filings.
+
+    Downloads company information from the SEC EDGAR database.
+    Includes public companies, investment funds, and their filings.
+    Automatically creates Neo4j graph nodes and OWNS relationships
+    from SC 13D/13G beneficial ownership filings, and DIRECTOR_OF /
+    EMPLOYED_BY relationships from Form 4 insider filings.
+
+    Free API - no key required.
+
+    Examples:
+
+        # Incremental sync with ownership + insider parsing
+        mitds ingest sec-edgar
+
+        # Test with limited records
+        mitds ingest sec-edgar --limit 100 --verbose
+
+        # Skip ownership parsing for faster ingestion
+        mitds ingest sec-edgar --no-ownership --limit 50
+
+        # Skip insider parsing
+        mitds ingest sec-edgar --no-insiders --limit 50
+    """
+    from ..ingestion.edgar import run_sec_edgar_ingestion
+
+    click.echo("Starting SEC EDGAR ingestion...")
+
+    if verbose:
+        click.echo(f"  Mode: {'incremental' if incremental else 'full'}")
+        click.echo(f"  Ownership parsing: {'enabled' if with_ownership else 'disabled'}")
+        click.echo(f"  Insider parsing: {'enabled' if with_insiders else 'disabled'}")
+        if limit:
+            click.echo(f"  Limit: {limit} companies")
+
+    start_time = datetime.now()
+
+    try:
+        result = asyncio.run(
+            run_sec_edgar_ingestion(
+                incremental=incremental,
+                limit=limit,
+                parse_ownership=with_ownership,
+                parse_insiders=with_insiders,
+            )
+        )
+
+        duration = (datetime.now() - start_time).total_seconds()
+
+        _print_result(result, duration, verbose)
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        if verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
+@cli.command(name="canada-corps")
+@click.option(
+    "--incremental/--full",
+    default=True,
+    help="Incremental or full sync (default: incremental)",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum number of corporations to process",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Enable verbose output",
+)
+def ingest_canada_corps(
+    incremental: bool,
+    limit: int | None,
+    verbose: bool,
+):
+    """Ingest Canada federal corporations.
+
+    Downloads corporation data from the ISED Open Government Portal.
+    Includes CBCA corporations, not-for-profits, and cooperatives.
+
+    Free data - no key required.
+
+    Examples:
+
+        # Incremental sync
+        mitds ingest canada-corps
+
+        # Test with limited records
+        mitds ingest canada-corps --limit 100 --verbose
+    """
+    from ..ingestion.canada_corps import run_canada_corps_ingestion
+
+    click.echo("Starting Canada Corporations ingestion...")
+
+    if verbose:
+        click.echo(f"  Mode: {'incremental' if incremental else 'full'}")
+        if limit:
+            click.echo(f"  Limit: {limit} corporations")
+
+    start_time = datetime.now()
+
+    try:
+        result = asyncio.run(
+            run_canada_corps_ingestion(
+                incremental=incremental,
+                limit=limit,
+            )
+        )
+
+        duration = (datetime.now() - start_time).total_seconds()
+
+        _print_result(result, duration, verbose)
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        if verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
 @cli.command(name="status")
 def ingestion_status():
     """Show status of all ingestion pipelines."""
@@ -315,7 +478,7 @@ def ingestion_status():
         click.echo("\nIngestion Pipeline Status")
         click.echo("=" * 60)
 
-        sources = ["irs990", "cra", "opencorporates", "meta_ads"]
+        sources = ["irs990", "cra", "sec_edgar", "canada_corps", "opencorporates", "meta_ads"]
         run_by_source = {r.source: r for r in runs}
 
         for source in sources:

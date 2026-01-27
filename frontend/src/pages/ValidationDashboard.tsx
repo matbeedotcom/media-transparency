@@ -119,13 +119,13 @@ interface ValidationRunResponse {
 // =========================
 
 async function fetchDashboard(): Promise<DashboardData> {
-  const response = await fetch('/api/validation/dashboard');
+  const response = await fetch('/api/v1/validation/dashboard');
   if (!response.ok) throw new Error('Failed to fetch dashboard');
   return response.json();
 }
 
 async function fetchDatasets(): Promise<GoldenDataset[]> {
-  const response = await fetch('/api/validation/datasets');
+  const response = await fetch('/api/v1/validation/datasets');
   if (!response.ok) throw new Error('Failed to fetch datasets');
   return response.json();
 }
@@ -135,7 +135,7 @@ async function runValidation(params: {
   include_synthetic: boolean;
   threshold: number;
 }): Promise<ValidationRunResponse> {
-  const response = await fetch('/api/validation/run', {
+  const response = await fetch('/api/v1/validation/run', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params),
@@ -148,7 +148,7 @@ async function runValidation(params: {
 }
 
 async function fetchJobStatus(jobId: string): Promise<{ status: string; results?: Record<string, number> }> {
-  const response = await fetch(`/api/validation/jobs/${jobId}`);
+  const response = await fetch(`/api/v1/validation/jobs/${jobId}`);
   if (!response.ok) throw new Error('Failed to fetch job status');
   return response.json();
 }

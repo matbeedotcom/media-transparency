@@ -73,6 +73,14 @@ FOR (p:Person) ON (p.name);
 CREATE INDEX rel_funded_by_temporal IF NOT EXISTS
 FOR ()-[r:FUNDED_BY]-() ON (r.valid_from, r.valid_to);
 
+// FUNDED_BY amount index for filtering by funding amount
+CREATE INDEX rel_funded_by_amount IF NOT EXISTS
+FOR ()-[r:FUNDED_BY]-() ON (r.amount);
+
+// FUNDED_BY fiscal year for year-based queries
+CREATE INDEX rel_funded_by_fiscal_year IF NOT EXISTS
+FOR ()-[r:FUNDED_BY]-() ON (r.fiscal_year);
+
 // DIRECTOR_OF temporal index
 CREATE INDEX rel_director_of_temporal IF NOT EXISTS
 FOR ()-[r:DIRECTOR_OF]-() ON (r.valid_from, r.valid_to);
@@ -84,6 +92,42 @@ FOR ()-[r:EMPLOYED_BY]-() ON (r.valid_from, r.valid_to);
 // OWNS temporal index
 CREATE INDEX rel_owns_temporal IF NOT EXISTS
 FOR ()-[r:OWNS]-() ON (r.valid_from, r.valid_to);
+
+// OWNS percentage for ownership filtering
+CREATE INDEX rel_owns_percentage IF NOT EXISTS
+FOR ()-[r:OWNS]-() ON (r.ownership_percentage);
+
+// =========================
+// Composite Indexes for Common Queries
+// =========================
+
+// Organization by type and status
+CREATE INDEX org_type_status IF NOT EXISTS
+FOR (o:Organization) ON (o.org_type, o.status);
+
+// Organization by jurisdiction
+CREATE INDEX org_jurisdiction IF NOT EXISTS
+FOR (o:Organization) ON (o.jurisdiction);
+
+// Person by organization (for board/employee lookups)
+CREATE INDEX person_primary_org IF NOT EXISTS
+FOR (p:Person) ON (p.primary_organization_id);
+
+// Entity type lookup (generic node label + type)
+CREATE INDEX org_entity_type IF NOT EXISTS
+FOR (o:Organization) ON (o.entity_type);
+
+// SEC CIK lookup (for SEC EDGAR data)
+CREATE INDEX org_sec_cik IF NOT EXISTS
+FOR (o:Organization) ON (o.sec_cik);
+
+// Person SEC CIK lookup (for Form 4 insider data)
+CREATE INDEX person_sec_cik IF NOT EXISTS
+FOR (p:Person) ON (p.sec_cik);
+
+// Canada Corporation number lookup
+CREATE INDEX org_canada_corp IF NOT EXISTS
+FOR (o:Organization) ON (o.canada_corp_number);
 
 // =========================
 // Full-text search indexes

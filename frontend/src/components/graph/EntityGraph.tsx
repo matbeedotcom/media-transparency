@@ -24,6 +24,7 @@ const EDGE_COLORS: Record<string, string> = {
   DIRECTOR_OF: '#8B5CF6', // Purple
   EMPLOYED_BY: '#3B82F6', // Blue
   SHARED_INFRA: '#F59E0B', // Yellow
+  OWNS: '#E11D48', // Rose
   DEFAULT: '#9CA3AF', // Gray
 };
 

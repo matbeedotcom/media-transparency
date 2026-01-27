@@ -33,6 +33,11 @@ const EVIDENCE_TYPE_CONFIG: Record<string, { label: string; icon: string; color:
     icon: '🏢',
     color: '#8B5CF6',
   },
+  SEC_EDGAR: {
+    label: 'SEC EDGAR',
+    icon: '📊',
+    color: '#E11D48',
+  },
   MANUAL: {
     label: 'Manual Entry',
     icon: '✏️',
