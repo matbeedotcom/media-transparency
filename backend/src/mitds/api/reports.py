@@ -165,7 +165,7 @@ async def _generate_report_async(
 async def generate_report(
     request: ReportRequest,
     background_tasks: BackgroundTasks,
-    user: CurrentUser,
+    user: OptionalUser = None,
 ) -> ReportResponse:
     """Generate a report asynchronously.
 

@@ -477,9 +477,41 @@ export const getIngestionStatus = async (): Promise<{ sources: IngestionStatus[]
   return response.data;
 };
 
+export interface CompanySearchResult {
+  source: string;
+  identifier: string;
+  identifier_type: string;
+  name: string;
+  details: Record<string, unknown>;
+}
+
+export interface CompanySearchResponse {
+  query: string;
+  results: CompanySearchResult[];
+  sources_searched: string[];
+  sources_failed: string[];
+  total: number;
+}
+
+export const searchIngestionSources = async (params: {
+  q: string;
+  sources?: string;
+  limit?: number;
+}): Promise<CompanySearchResponse> => {
+  const response = await apiClient.get('/ingestion/search', { params });
+  return response.data;
+};
+
 export const triggerIngestion = async (
   source: string,
-  data?: { incremental?: boolean; date_range?: { start: string; end: string } }
+  data?: {
+    incremental?: boolean;
+    date_range?: { start: string; end: string };
+    start_year?: number;
+    end_year?: number;
+    limit?: number;
+    target_entities?: string[];
+  }
 ): Promise<AsyncJobResponse> => {
   const response = await apiClient.post(`/ingestion/${source}/trigger`, data);
   return response.data;

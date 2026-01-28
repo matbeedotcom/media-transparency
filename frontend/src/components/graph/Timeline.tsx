@@ -156,12 +156,8 @@ export default function Timeline({
     });
   };
 
-  const formatTime = (date: Date) => {
-    return date.toLocaleTimeString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  };
+  // formatTime available for future use in tooltip display
+  // const formatTime = (date: Date) => date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 
   if (events.length === 0) {
     return (

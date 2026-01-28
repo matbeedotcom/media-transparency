@@ -129,9 +129,9 @@ async def list_candidates(
 @router.post("/candidates/{candidate_id}/merge")
 async def merge_candidate(
     candidate_id: UUID,
-    user: CurrentUser,
+    user: OptionalUser = None,
 ):
-    """Approve and merge a resolution candidate. Requires authentication."""
+    """Approve and merge a resolution candidate."""
     from ..resolution.reconcile import ReconciliationQueue
 
     queue = ReconciliationQueue()
@@ -140,10 +140,11 @@ async def merge_candidate(
     if not task:
         raise HTTPException(status_code=404, detail="Candidate not found")
 
+    reviewer = user.id if user else "anonymous"
     resolved = await queue.resolve_task(
         task_id=candidate_id,
         resolution="same_entity",
-        reviewer=user.id,
+        reviewer=reviewer,
         notes="Approved via API",
     )
 
@@ -154,7 +155,7 @@ async def merge_candidate(
         "id": str(resolved.id),
         "status": resolved.status.value,
         "resolution": "same_entity",
-        "reviewer": user.id,
+        "reviewer": reviewer,
     }
 
 
@@ -166,9 +167,9 @@ async def merge_candidate(
 @router.post("/candidates/{candidate_id}/reject")
 async def reject_candidate(
     candidate_id: UUID,
-    user: CurrentUser,
+    user: OptionalUser = None,
 ):
-    """Reject a resolution candidate. Requires authentication."""
+    """Reject a resolution candidate."""
     from ..resolution.reconcile import ReconciliationQueue
 
     queue = ReconciliationQueue()
@@ -177,10 +178,11 @@ async def reject_candidate(
     if not task:
         raise HTTPException(status_code=404, detail="Candidate not found")
 
+    reviewer = user.id if user else "anonymous"
     resolved = await queue.resolve_task(
         task_id=candidate_id,
         resolution="different",
-        reviewer=user.id,
+        reviewer=reviewer,
         notes="Rejected via API",
     )
 
@@ -191,7 +193,7 @@ async def reject_candidate(
         "id": str(resolved.id),
         "status": resolved.status.value,
         "resolution": "different",
-        "reviewer": user.id,
+        "reviewer": reviewer,
     }
 
 
@@ -204,9 +206,9 @@ async def reject_candidate(
 async def trigger_resolution(
     entity_type: str = Query("all", pattern="^(Organization|Person|Outlet|all)$"),
     dry_run: bool = Query(False),
-    user: CurrentUser = None,
+    user: OptionalUser = None,
 ):
-    """Trigger a resolution run. Requires authentication."""
+    """Trigger a resolution run."""
     from ..resolution.resolver import EntityResolver
 
     entity_types = (

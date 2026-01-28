@@ -21,6 +21,8 @@ logger = get_logger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler for startup and shutdown events."""
+    import asyncio
+
     # Startup
     settings = get_settings()
     logger.info(
@@ -30,6 +32,10 @@ async def lifespan(app: FastAPI):
             "debug": settings.api_debug,
         },
     )
+
+    # Warm up search cache in background (non-blocking)
+    from mitds.ingestion.search import warmup_search_cache
+    asyncio.create_task(warmup_search_cache())
 
     yield
 

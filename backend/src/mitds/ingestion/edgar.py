@@ -623,12 +623,19 @@ class SECEDGARIngester(BaseIngester[EDGARCompany]):
         Returns:
             List of EDGARForm4Filing (one per reporting owner)
         """
-        import xml.etree.ElementTree as ET
+        from lxml import etree
 
         results = []
         try:
-            root = ET.fromstring(xml_content)
-        except ET.ParseError as e:
+            # Use lxml with recovery mode to handle malformed XML
+            parser = etree.XMLParser(recover=True, encoding="utf-8")
+            # Encode to bytes if string, lxml prefers bytes
+            if isinstance(xml_content, str):
+                xml_bytes = xml_content.encode("utf-8", errors="replace")
+            else:
+                xml_bytes = xml_content
+            root = etree.fromstring(xml_bytes, parser=parser)
+        except etree.XMLSyntaxError as e:
             self.logger.warning(f"Failed to parse Form 4 XML: {e}")
             return results
 
@@ -694,7 +701,34 @@ class SECEDGARIngester(BaseIngester[EDGARCompany]):
         Yields:
             Parsed company records
         """
-        # First, get the ticker mapping for active public companies
+        # If targeting specific entities, fetch directly by CIK
+        if config.target_entities:
+            self.logger.info(
+                f"Targeted ingestion for {len(config.target_entities)} CIKs"
+            )
+            for i, cik in enumerate(config.target_entities):
+                try:
+                    cik_padded = cik.zfill(10)
+                    self.logger.debug(
+                        f"Fetching submissions for CIK {cik_padded} "
+                        f"({i+1}/{len(config.target_entities)})"
+                    )
+
+                    data = await self.fetch_company_submissions(cik_padded)
+                    if data:
+                        company = self.parse_company(data)
+                        company.raw_submissions = data
+                        yield company
+
+                    # Rate limiting
+                    await asyncio.sleep(0.15)
+
+                except Exception as e:
+                    self.logger.warning(f"Error fetching CIK {cik}: {e}")
+                    continue
+            return
+
+        # Full ingestion: get the ticker mapping for active public companies
         self.logger.info("Fetching company tickers mapping...")
         tickers_map = await self.fetch_company_tickers()
 
@@ -1147,6 +1181,7 @@ async def run_sec_edgar_ingestion(
     incremental: bool = True,
     parse_ownership: bool = True,
     parse_insiders: bool = True,
+    target_entities: list[str] | None = None,
 ) -> dict[str, Any]:
     """Run SEC EDGAR ingestion.
 
@@ -1155,6 +1190,7 @@ async def run_sec_edgar_ingestion(
         incremental: Whether to do incremental sync
         parse_ownership: Whether to parse 13D/13G ownership filings
         parse_insiders: Whether to parse Form 4 insider transaction filings
+        target_entities: Optional list of CIKs to ingest specifically
 
     Returns:
         Ingestion result dictionary
@@ -1167,6 +1203,7 @@ async def run_sec_edgar_ingestion(
         config = IngestionConfig(
             incremental=incremental,
             limit=limit,
+            target_entities=target_entities,
         )
 
         result = await ingester.run(config)

@@ -404,6 +404,18 @@ class CanadaCorporationsIngester(BaseIngester[CanadaCorporation]):
             raw_records = self.parse_bulk_data(zip_content)
             self.logger.info(f"Parsed {len(raw_records)} raw records")
 
+            # Filter by target entities (corporation numbers) if specified
+            if config.target_entities:
+                target_nums = set(config.target_entities)
+                raw_records = [
+                    r for r in raw_records
+                    if str(r.get("corporation_number", "")).strip() in target_nums
+                ]
+                self.logger.info(
+                    f"Filtered to {len(raw_records)} corporations for "
+                    f"{len(config.target_entities)} target corporation numbers"
+                )
+
             # Apply limit
             if config.limit:
                 raw_records = raw_records[:config.limit]
@@ -528,12 +540,14 @@ class CanadaCorporationsIngester(BaseIngester[CanadaCorporation]):
 async def run_canada_corps_ingestion(
     limit: int | None = None,
     incremental: bool = True,
+    target_entities: list[str] | None = None,
 ) -> dict[str, Any]:
     """Run Canada Corporations ingestion.
 
     Args:
         limit: Maximum number of corporations to process
         incremental: Whether to do incremental sync
+        target_entities: Optional list of corporation numbers to ingest specifically
 
     Returns:
         Ingestion result dictionary
@@ -544,6 +558,7 @@ async def run_canada_corps_ingestion(
         config = IngestionConfig(
             incremental=incremental,
             limit=limit,
+            target_entities=target_entities,
         )
 
         result = await ingester.run(config)

@@ -273,7 +273,7 @@ async def list_jobs(
 @router.post("/{job_id}/cancel")
 async def cancel_job(
     job_id: UUID,
-    user: CurrentUser = None,
+    user: OptionalUser = None,
 ) -> JobStatus:
     """Cancel a pending or running job.
 

@@ -27,6 +27,7 @@ class IngestionTriggerRequest(BaseModel):
     start_year: int | None = None
     end_year: int | None = None
     limit: int | None = None
+    target_entities: list[str] | None = None
 
 
 class IngestionRunResponse(BaseModel):
@@ -42,6 +43,49 @@ class IngestionRunResponse(BaseModel):
     records_updated: int = 0
     duplicates_found: int = 0
     errors: list[dict[str, Any]] = []
+
+
+# =========================
+# Search Companies
+# =========================
+
+
+@router.get("/search")
+async def search_companies(
+    q: str,
+    sources: str | None = None,
+    limit: int = 10,
+    user: OptionalUser = None,
+) -> dict[str, Any]:
+    """Search for companies across all data sources.
+
+    Searches by company name, ticker, or identifier across SEC EDGAR,
+    IRS 990, CRA, and Canada Corporations data.
+
+    Args:
+        q: Search query (company name, ticker, etc.)
+        sources: Comma-separated list of sources to search (default: all)
+        limit: Maximum results per source (default: 10)
+    """
+    from ..ingestion.search import search_all_sources
+
+    source_list = None
+    if sources:
+        source_list = [s.strip() for s in sources.split(",")]
+
+    result = await search_all_sources(
+        query=q,
+        sources=source_list,
+        limit=min(limit, 50),
+    )
+
+    return {
+        "query": result.query,
+        "results": [r.model_dump() for r in result.results],
+        "sources_searched": result.sources_searched,
+        "sources_failed": result.sources_failed,
+        "total": len(result.results),
+    }
 
 
 # =========================
@@ -136,7 +180,7 @@ async def get_ingestion_runs(
     source: str | None = None,
     status: str | None = None,
     limit: int = 20,
-    user: CurrentUser = None,
+    user: OptionalUser = None,
 ) -> dict[str, Any]:
     """Get history of ingestion runs.
 
@@ -210,7 +254,7 @@ async def get_ingestion_runs(
 @router.get("/runs/{run_id}")
 async def get_ingestion_run(
     run_id: UUID,
-    user: CurrentUser = None,
+    user: OptionalUser = None,
 ) -> IngestionRunResponse:
     """Get details of a specific ingestion run."""
     async with get_db_session() as db:
@@ -273,19 +317,23 @@ async def _run_ingestion_task(
                 end_year=request.end_year,
                 incremental=request.incremental,
                 limit=request.limit,
+                target_entities=request.target_entities,
             )
         elif source == "cra":
             result = await run_cra_ingestion(
                 incremental=request.incremental,
                 limit=request.limit,
+                target_entities=request.target_entities,
             )
         elif source == "sec_edgar":
             result = await run_sec_edgar_ingestion(
                 limit=request.limit,
+                target_entities=request.target_entities,
             )
         elif source == "canada_corps":
             result = await run_canada_corps_ingestion(
                 limit=request.limit,
+                target_entities=request.target_entities,
             )
         else:
             # Not implemented yet

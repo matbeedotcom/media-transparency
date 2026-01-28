@@ -154,6 +154,21 @@ class IRS990Ingester(BaseIngester[IRS990Filing]):
                     f"After date filter: {len(index_entries)} filings"
                 )
 
+            # Filter by target entities (EINs) if specified
+            if config.target_entities:
+                # Normalize EINs by stripping dashes for comparison
+                target_eins = {
+                    ein.replace("-", "") for ein in config.target_entities
+                }
+                index_entries = [
+                    e for e in index_entries
+                    if e.ein.replace("-", "") in target_eins
+                ]
+                self.logger.info(
+                    f"Filtered to {len(index_entries)} filings for "
+                    f"{len(target_eins)} target EINs"
+                )
+
             # Process each filing
             for entry in index_entries:
                 try:
@@ -871,6 +886,7 @@ async def run_irs990_ingestion(
     end_year: int | None = None,
     incremental: bool = True,
     limit: int | None = None,
+    target_entities: list[str] | None = None,
 ) -> dict[str, Any]:
     """Run IRS 990 ingestion directly (not via Celery).
 
@@ -879,6 +895,7 @@ async def run_irs990_ingestion(
         end_year: End year (default: current year)
         incremental: Whether to do incremental sync
         limit: Maximum number of records to process
+        target_entities: Optional list of EINs to ingest specifically
 
     Returns:
         Ingestion result dictionary
@@ -890,6 +907,7 @@ async def run_irs990_ingestion(
         config = IngestionConfig(
             incremental=incremental,
             limit=limit,
+            target_entities=target_entities,
             extra_params={
                 "start_year": start_year or current_year - 1,
                 "end_year": end_year or current_year,

@@ -99,10 +99,20 @@ export default function EntityGraph({
         // Use temporal query
         const temporalData = await getGraphAtTime(entityId, asOf, { depth: maxHops });
         // Transform temporal data to match relationship data structure
+        const mappedRels: Relationship[] = (temporalData.relationships || []).map((r) => ({
+          id: r.id,
+          rel_type: r.rel_type,
+          source_entity: r.source,
+          target_entity: r.target,
+          confidence: 1,
+          properties: {},
+          valid_from: r.valid_from,
+          valid_to: r.valid_to,
+        }));
         return {
           entity_id: entityId,
-          relationships: temporalData.relationships || [],
-          total: temporalData.relationships?.length || 0,
+          relationships: mappedRels,
+          total: mappedRels.length,
         };
       }
       return getEntityRelationships(entityId, { direction: 'both' });

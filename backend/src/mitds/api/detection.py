@@ -316,7 +316,7 @@ async def _fetch_timing_events(
 async def analyze_temporal_coordination(
     request: TemporalAnalysisRequest,
     background_tasks: BackgroundTasks,
-    user: CurrentUser = None,
+    user: OptionalUser = None,
 ) -> TemporalAnalysisResponse | dict[str, Any]:
     """Analyze temporal coordination between entities.
 
@@ -425,7 +425,7 @@ async def analyze_temporal_coordination(
 @router.post("/funding-clusters")
 async def detect_funding_clusters(
     request: FundingClusterRequest,
-    user: CurrentUser = None,
+    user: OptionalUser = None,
 ) -> FundingClusterResponse:
     """Detect funding clusters among entities.
 
@@ -487,7 +487,7 @@ async def detect_funding_clusters(
 @router.post("/infrastructure-sharing")
 async def detect_infrastructure_sharing(
     request: InfrastructureSharingRequest,
-    user: CurrentUser = None,
+    user: OptionalUser = None,
 ) -> InfrastructureSharingResponse:
     """Detect shared infrastructure between domains.
 
@@ -632,7 +632,7 @@ async def detect_infrastructure_sharing(
 @router.post("/composite-score")
 async def calculate_composite_score_endpoint(
     request: CompositeScoreRequest,
-    user: CurrentUser = None,
+    user: OptionalUser = None,
 ) -> CompositeScoreResponse:
     """Calculate composite coordination score combining all signals.
 
@@ -857,7 +857,7 @@ async def calculate_composite_score_endpoint(
 @router.get("/explain/{finding_id}")
 async def explain_finding(
     finding_id: UUID,
-    user: CurrentUser = None,
+    user: OptionalUser = None,
 ) -> FindingExplanation:
     """Get detailed explanation for a detection finding.
 

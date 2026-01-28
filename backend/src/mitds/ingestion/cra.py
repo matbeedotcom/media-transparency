@@ -153,6 +153,27 @@ class CRAIngester(BaseIngester[CRACharity]):
                         donees_by_bn[bn] = []
                     donees_by_bn[bn].append(row)
 
+        # Filter by target entities (BNs) if specified
+        if config.target_entities:
+            target_bns = set(config.target_entities)
+            # Also add normalized versions
+            target_bns_normalized = set()
+            for bn in target_bns:
+                target_bns_normalized.add(bn)
+                normalized = self._normalize_bn(bn)
+                if normalized:
+                    target_bns_normalized.add(normalized)
+
+            identification = [
+                row for row in identification
+                if (row.get("BN", row.get("bn", "")).strip() in target_bns_normalized
+                    or self._normalize_bn(row.get("BN", row.get("bn", "")).strip()) in target_bns_normalized)
+            ]
+            self.logger.info(
+                f"Filtered to {len(identification)} charities for "
+                f"{len(config.target_entities)} target BNs"
+            )
+
         # Process identification records
         for row in identification:
             try:
@@ -608,12 +629,14 @@ def get_cra_celery_task():
 async def run_cra_ingestion(
     incremental: bool = True,
     limit: int | None = None,
+    target_entities: list[str] | None = None,
 ) -> dict[str, Any]:
     """Run CRA ingestion directly (not via Celery).
 
     Args:
         incremental: Whether to do incremental sync
         limit: Maximum number of records to process
+        target_entities: Optional list of BNs to ingest specifically
 
     Returns:
         Ingestion result dictionary
@@ -623,6 +646,7 @@ async def run_cra_ingestion(
         config = IngestionConfig(
             incremental=incremental,
             limit=limit,
+            target_entities=target_entities,
         )
         result = await ingester.run(config)
         return result.model_dump()

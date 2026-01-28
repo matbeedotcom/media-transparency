@@ -24,6 +24,7 @@ class IngestionConfig(BaseModel):
     limit: int | None = None
     date_from: datetime | None = None
     date_to: datetime | None = None
+    target_entities: list[str] | None = None
     extra_params: dict[str, Any] = {}
 
 

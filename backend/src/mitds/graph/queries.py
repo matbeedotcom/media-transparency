@@ -100,7 +100,7 @@ async def get_funding_paths(
 
         query = f"""
         MATCH path = (funder {{id: $funder_id}})<-[:FUNDED_BY*1..{max_hops}]-(recipient)
-        WITH path, [r IN relationships(path) | r] as rels
+        WITH path, funder, recipient, [r IN relationships(path) | r] as rels
         WHERE true {amount_filter} {year_filter}
         RETURN
             funder,

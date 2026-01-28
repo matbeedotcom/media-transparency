@@ -330,7 +330,7 @@ def _simulate_detection_synthetic(pattern: Any, threshold: float) -> dict[str, A
 async def run_validation(
     request: ValidationRunRequest,
     background_tasks: BackgroundTasks,
-    user: CurrentUser,
+    user: OptionalUser = None,
 ) -> ValidationRunResponse:
     """Run validation against golden dataset.
 

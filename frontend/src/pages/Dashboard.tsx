@@ -13,8 +13,10 @@ import {
   listJobs,
   cancelJob,
   getIngestionRuns,
+  searchIngestionSources,
   type IngestionStatus,
   type JobStatusFull,
+  type CompanySearchResult,
 } from '../services/api';
 
 export default function Dashboard() {
@@ -23,6 +25,12 @@ export default function Dashboard() {
   const [ingestionIncremental, setIngestionIncremental] = useState(true);
   const [ingestionStartYear, setIngestionStartYear] = useState('');
   const [ingestionEndYear, setIngestionEndYear] = useState('');
+  const [ingestionLimit, setIngestionLimit] = useState('');
+
+  // Company search state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchTimeout, setSearchTimeout] = useState<ReturnType<typeof setTimeout> | null>(null);
+  const [selectedEntities, setSelectedEntities] = useState<CompanySearchResult[]>([]);
 
   // Job result viewer
   const [viewingJobId, setViewingJobId] = useState<string | null>(null);
@@ -92,23 +100,67 @@ export default function Dashboard() {
     },
   });
 
+  // Company search query (debounced)
+  const { data: searchData, isLoading: searchLoading } = useQuery({
+    queryKey: ['ingestion-search', searchQuery, expandedSource],
+    queryFn: () => searchIngestionSources({
+      q: searchQuery,
+      sources: expandedSource || undefined,
+      limit: 15,
+    }),
+    enabled: searchQuery.length >= 2,
+    staleTime: 60000,
+  });
+
   const handleTrigger = (source: string) => {
     if (triggerMutation.isPending) return;
     triggerMutation.mutate(source);
   };
 
+  const handleSearchInput = (value: string) => {
+    if (searchTimeout) clearTimeout(searchTimeout);
+    const timeout = setTimeout(() => setSearchQuery(value), 300);
+    setSearchTimeout(timeout);
+  };
+
+  const handleSelectEntity = (result: CompanySearchResult) => {
+    setSelectedEntities((prev) => {
+      const exists = prev.some(
+        (e) => e.identifier === result.identifier && e.source === result.source
+      );
+      if (exists) {
+        return prev.filter(
+          (e) => !(e.identifier === result.identifier && e.source === result.source)
+        );
+      }
+      return [...prev, result];
+    });
+  };
+
   const handleTriggerWithOptions = (source: string) => {
     if (triggerMutation.isPending) return;
-    const dateRange = ingestionStartYear && ingestionEndYear
-      ? { start: `${ingestionStartYear}-01-01`, end: `${ingestionEndYear}-12-31` }
-      : undefined;
+
+    // Build target entities for this source from selections
+    const sourceTargets = selectedEntities
+      .filter((e) => e.source === source)
+      .map((e) => e.identifier);
+
+    const startYear = ingestionStartYear ? parseInt(ingestionStartYear) : undefined;
+    const endYear = ingestionEndYear ? parseInt(ingestionEndYear) : undefined;
+    const limit = ingestionLimit ? parseInt(ingestionLimit) : undefined;
+
     triggerIngestion(source, {
       incremental: ingestionIncremental,
-      date_range: dateRange,
+      start_year: startYear,
+      end_year: endYear,
+      limit,
+      target_entities: sourceTargets.length > 0 ? sourceTargets : undefined,
     }).then(() => {
       queryClient.invalidateQueries({ queryKey: ['ingestion-status'] });
       queryClient.invalidateQueries({ queryKey: ['jobs-list'] });
       setExpandedSource(null);
+      // Clear selections for this source after trigger
+      setSelectedEntities((prev) => prev.filter((e) => e.source !== source));
     });
   };
 
@@ -255,6 +307,137 @@ export default function Dashboard() {
                     <tr>
                       <td colSpan={5}>
                         <div className="ingestion-config">
+                          {/* Company Search */}
+                          <div className="search-section">
+                            <h4>Target Specific Companies</h4>
+                            <p className="search-hint">
+                              Search by company name to ingest only specific entities instead of the full dataset.
+                            </p>
+                            <input
+                              type="text"
+                              className="search-input"
+                              placeholder={`Search ${source.source.toUpperCase()} companies...`}
+                              onChange={(e) => handleSearchInput(e.target.value)}
+                            />
+
+                            {/* Selected entities chips */}
+                            {selectedEntities.filter((e) => e.source === source.source).length > 0 && (
+                              <div className="selected-chips">
+                                {selectedEntities
+                                  .filter((e) => e.source === source.source)
+                                  .map((entity) => (
+                                    <span
+                                      key={`${entity.source}-${entity.identifier}`}
+                                      className="entity-chip"
+                                    >
+                                      {entity.name}
+                                      <span className="chip-id">{entity.identifier_type}: {entity.identifier}</span>
+                                      <button
+                                        type="button"
+                                        className="chip-remove"
+                                        onClick={() => handleSelectEntity(entity)}
+                                        title="Remove"
+                                      >
+                                        x
+                                      </button>
+                                    </span>
+                                  ))}
+                              </div>
+                            )}
+
+                            {/* Search results */}
+                            {searchLoading && searchQuery.length >= 2 && (
+                              <div className="search-status">Searching...</div>
+                            )}
+                            {searchData && searchData.results.length > 0 && (
+                              <div className="search-results">
+                                <table className="runs-table">
+                                  <thead>
+                                    <tr>
+                                      <th></th>
+                                      <th>Name</th>
+                                      <th>ID</th>
+                                      <th>Details</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {searchData.results
+                                      .filter((r) => r.source === source.source)
+                                      .map((result) => {
+                                        const isSelected = selectedEntities.some(
+                                          (e) => e.identifier === result.identifier && e.source === result.source
+                                        );
+                                        return (
+                                          <tr
+                                            key={`${result.source}-${result.identifier}`}
+                                            className={`search-result-row ${isSelected ? 'selected' : ''}`}
+                                            onClick={() => handleSelectEntity(result)}
+                                          >
+                                            <td>
+                                              <input
+                                                type="checkbox"
+                                                checked={isSelected}
+                                                readOnly
+                                              />
+                                            </td>
+                                            <td><strong>{result.name}</strong></td>
+                                            <td className="text-muted">
+                                              {result.identifier_type}: {result.identifier}
+                                            </td>
+                                            <td className="result-details">
+                                              {Array.isArray(result.details.tickers) && (
+                                                <span className="detail-tag">
+                                                  {(result.details.tickers as string[]).join(', ')}
+                                                </span>
+                                              )}
+                                              {typeof result.details.form_type === 'string' && (
+                                                <span className="detail-tag">
+                                                  {'Form ' + result.details.form_type}
+                                                </span>
+                                              )}
+                                              {typeof result.details.province === 'string' && (
+                                                <span className="detail-tag">
+                                                  {result.details.province}
+                                                </span>
+                                              )}
+                                              {typeof result.details.status === 'string' && (
+                                                <span className="detail-tag">
+                                                  {result.details.status}
+                                                </span>
+                                              )}
+                                              {typeof result.details.operating_name === 'string' && (
+                                                <span className="detail-tag">
+                                                  {'aka ' + result.details.operating_name}
+                                                </span>
+                                              )}
+                                              {typeof result.details.corporation_type === 'string' && (
+                                                <span className="detail-tag">
+                                                  {result.details.corporation_type}
+                                                </span>
+                                              )}
+                                            </td>
+                                          </tr>
+                                        );
+                                      })}
+                                  </tbody>
+                                </table>
+                                {searchData.sources_failed.length > 0 && (
+                                  <div className="search-status text-warning">
+                                    Search failed for: {searchData.sources_failed.join(', ')}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                            {searchData && searchQuery.length >= 2 &&
+                              searchData.results.filter((r) => r.source === source.source).length === 0 &&
+                              !searchLoading && (
+                                <div className="search-status text-muted">
+                                  No results found for "{searchQuery}" in {source.source.toUpperCase()}
+                                </div>
+                              )}
+                          </div>
+
+                          {/* Ingestion options */}
                           <div className="config-row">
                             <label className="config-label">
                               <input
@@ -288,12 +471,25 @@ export default function Dashboard() {
                                 placeholder="e.g. 2024"
                               />
                             </label>
+                            <label className="config-label">
+                              Limit:
+                              <input
+                                type="number"
+                                className="config-input"
+                                min="1"
+                                value={ingestionLimit}
+                                onChange={(e) => setIngestionLimit(e.target.value)}
+                                placeholder="max records"
+                              />
+                            </label>
                             <button
                               type="button"
                               className="btn btn-primary"
                               onClick={() => handleTriggerWithOptions(source.source)}
                             >
-                              Run with Options
+                              {selectedEntities.filter((e) => e.source === source.source).length > 0
+                                ? `Ingest ${selectedEntities.filter((e) => e.source === source.source).length} Selected`
+                                : 'Run Full Ingestion'}
                             </button>
                           </div>
                           {/* Recent runs for this source */}
@@ -654,6 +850,117 @@ export default function Dashboard() {
           font-weight: 600;
           line-height: 20px;
           color: var(--text-primary);
+        }
+
+        .search-section {
+          margin-bottom: var(--spacing-md);
+          padding-bottom: var(--spacing-md);
+          border-bottom: 1px solid var(--border-color);
+        }
+
+        .search-section h4 {
+          margin-bottom: var(--spacing-xs);
+          font-size: 0.875rem;
+        }
+
+        .search-hint {
+          font-size: 0.8125rem;
+          color: var(--text-muted);
+          margin-bottom: var(--spacing-sm);
+        }
+
+        .search-input {
+          width: 100%;
+          padding: 8px 12px;
+          border: 1px solid var(--border-color);
+          border-radius: var(--border-radius);
+          font-size: 0.875rem;
+          margin-bottom: var(--spacing-sm);
+        }
+
+        .search-input:focus {
+          outline: none;
+          border-color: var(--color-primary);
+          box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+        }
+
+        .selected-chips {
+          display: flex;
+          flex-wrap: wrap;
+          gap: var(--spacing-xs);
+          margin-bottom: var(--spacing-sm);
+        }
+
+        .entity-chip {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 4px 10px;
+          background: var(--color-primary);
+          color: white;
+          border-radius: 16px;
+          font-size: 0.75rem;
+          font-weight: 500;
+        }
+
+        .chip-id {
+          opacity: 0.75;
+          font-size: 0.625rem;
+        }
+
+        .chip-remove {
+          background: none;
+          border: none;
+          color: white;
+          cursor: pointer;
+          font-size: 14px;
+          padding: 0 2px;
+          opacity: 0.7;
+          line-height: 1;
+        }
+
+        .chip-remove:hover {
+          opacity: 1;
+        }
+
+        .search-results {
+          max-height: 280px;
+          overflow-y: auto;
+          border: 1px solid var(--border-color);
+          border-radius: var(--border-radius);
+          margin-bottom: var(--spacing-sm);
+        }
+
+        .search-result-row {
+          cursor: pointer;
+        }
+
+        .search-result-row:hover {
+          background: var(--bg-tertiary);
+        }
+
+        .search-result-row.selected {
+          background: rgba(59, 130, 246, 0.08);
+        }
+
+        .search-status {
+          font-size: 0.8125rem;
+          padding: var(--spacing-sm);
+        }
+
+        .result-details {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 4px;
+        }
+
+        .detail-tag {
+          display: inline-block;
+          padding: 2px 6px;
+          background: var(--bg-tertiary);
+          border-radius: 4px;
+          font-size: 0.6875rem;
+          color: var(--text-secondary);
         }
       `}</style>
     </div>
