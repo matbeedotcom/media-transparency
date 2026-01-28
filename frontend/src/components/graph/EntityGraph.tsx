@@ -5,7 +5,7 @@
  */
 
 import { useEffect, useRef, useCallback, useState } from 'react';
-import cytoscape, { Core, NodeSingular, EdgeSingular } from 'cytoscape';
+import cytoscape, { Core, NodeSingular, EdgeSingular, Layouts } from 'cytoscape';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { getEntityRelationships, getGraphAtTime, findAllPaths, type Relationship, type PathResult } from '../../services/api';
 
@@ -69,6 +69,7 @@ export default function EntityGraph({
 }: EntityGraphProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
+  const layoutRef = useRef<Layouts | null>(null);
   const [_selectedNode, setSelectedNode] = useState<string | null>(null);
   const [pathFindingMode, setPathFindingMode] = useState(false);
   const [pathSource, setPathSource] = useState<string | null>(null);
@@ -194,6 +195,12 @@ export default function EntityGraph({
       })),
     ];
 
+    // Stop any running layout before creating/updating
+    if (layoutRef.current) {
+      layoutRef.current.stop();
+      layoutRef.current = null;
+    }
+
     // Initialize Cytoscape if not already done
     if (!cyRef.current) {
       cyRef.current = cytoscape({
@@ -290,27 +297,32 @@ export default function EntityGraph({
             },
           },
         ],
-        layout: {
-          name: 'cose',
-          idealEdgeLength: 100,
-          nodeOverlap: 20,
-          refresh: 20,
-          fit: true,
-          padding: 30,
-          randomize: false,
-          componentSpacing: 100,
-          nodeRepulsion: 400000,
-          edgeElasticity: 100,
-          nestingFactor: 5,
-          gravity: 80,
-          numIter: 1000,
-          initialTemp: 200,
-          coolingFactor: 0.95,
-          minTemp: 1.0,
-        },
+        // Use preset layout initially (no animation), then run cose layout
+        layout: { name: 'preset' },
         minZoom: 0.3,
         maxZoom: 3,
       });
+
+      // Run the cose layout and store reference for cleanup
+      layoutRef.current = cyRef.current.layout({
+        name: 'cose',
+        idealEdgeLength: 100,
+        nodeOverlap: 20,
+        refresh: 20,
+        fit: true,
+        padding: 30,
+        randomize: false,
+        componentSpacing: 100,
+        nodeRepulsion: 400000,
+        edgeElasticity: 100,
+        nestingFactor: 5,
+        gravity: 80,
+        numIter: 1000,
+        initialTemp: 200,
+        coolingFactor: 0.95,
+        minTemp: 1.0,
+      } as cytoscape.LayoutOptions);
+      layoutRef.current.run();
 
       // Add event listeners
       cyRef.current.on('tap', 'node', (evt) => {
@@ -360,14 +372,20 @@ export default function EntityGraph({
       // Update existing graph with new data
       cyRef.current.elements().remove();
       cyRef.current.add(elements);
-      cyRef.current.layout({
+      layoutRef.current = cyRef.current.layout({
         name: 'cose',
         animate: true,
         animationDuration: 500,
-      } as cytoscape.LayoutOptions).run();
+      } as cytoscape.LayoutOptions);
+      layoutRef.current.run();
     }
 
     return () => {
+      // Stop any running layout first to prevent accessing destroyed instance
+      if (layoutRef.current) {
+        layoutRef.current.stop();
+        layoutRef.current = null;
+      }
       if (cyRef.current) {
         cyRef.current.destroy();
         cyRef.current = null;

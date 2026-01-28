@@ -288,7 +288,10 @@ export default function EntityExplorer() {
               </div>
             ) : searchResults?.results.length ? (
               <ul className="entity-list">
-                {searchResults.results.map((entity: Entity) => (
+                {/* Deduplicate results by ID to prevent duplicate key warnings */}
+                {Array.from(
+                  new Map(searchResults.results.map((e: Entity) => [e.id, e])).values()
+                ).map((entity: Entity) => (
                   <li
                     key={entity.id}
                     className={`entity-item ${id === entity.id ? 'selected' : ''}`}

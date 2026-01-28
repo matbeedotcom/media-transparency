@@ -7,6 +7,7 @@ import ReportGenerator from './pages/ReportGenerator';
 import ValidationDashboard from './pages/ValidationDashboard';
 import EntityResolution from './pages/EntityResolution';
 import IngestionPage from './pages/IngestionPage';
+import SettingsPage from './pages/SettingsPage';
 
 function App() {
   return (
@@ -20,6 +21,7 @@ function App() {
         <Route path="reports" element={<ReportGenerator />} />
         <Route path="validation" element={<ValidationDashboard />} />
         <Route path="resolution" element={<EntityResolution />} />
+        <Route path="settings" element={<SettingsPage />} />
       </Route>
     </Routes>
   );

@@ -172,6 +172,7 @@ from mitds.api.ingestion import router as ingestion_router
 from mitds.api.jobs import router as jobs_router
 from mitds.api.validation import router as validation_router
 from mitds.api.resolution import router as resolution_router
+from mitds.api.settings import router as settings_router
 
 app.include_router(entities_router, prefix="/api/v1", tags=["Entities"])
 app.include_router(relationships_router, prefix="/api/v1", tags=["Relationships"])
@@ -181,6 +182,7 @@ app.include_router(ingestion_router, prefix="/api/v1", tags=["Ingestion"])
 app.include_router(jobs_router, prefix="/api/v1", tags=["Jobs"])
 app.include_router(validation_router, prefix="/api/v1", tags=["Validation"])
 app.include_router(resolution_router, prefix="/api/v1", tags=["Resolution"])
+app.include_router(settings_router, prefix="/api/v1", tags=["Settings"])
 
 
 # =========================

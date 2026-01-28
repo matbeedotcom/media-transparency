@@ -22,7 +22,7 @@ import json
 import re
 from datetime import datetime, date
 from typing import Any, AsyncIterator
-from uuid import uuid4
+from uuid import uuid4, UUID
 from decimal import Decimal
 
 import httpx
@@ -33,7 +33,10 @@ from ..config import get_settings
 from ..db import get_db_session, get_neo4j_session
 from ..logging import get_context_logger
 from ..storage import StorageClient, generate_storage_key, get_storage
-from .base import BaseIngester, IngestionConfig, with_retry
+from .base import BaseIngester, IngestionConfig, with_retry, Neo4jHelper
+from .search import search_all_sources
+from ..resolution.matcher import normalize_organization_name, FuzzyMatcher, MatchCandidate
+from rapidfuzz import fuzz
 
 logger = get_context_logger(__name__)
 
@@ -70,6 +73,138 @@ MEDIA_TYPES = [
     "placement_costs",
     "other",
 ]
+
+
+# =========================
+# Vendor Resolution Functions
+# =========================
+
+
+async def resolve_vendor_to_organization(
+    session,  # Neo4j session
+    vendor_name: str,
+    log,
+) -> dict | None:
+    """Try to match a vendor name against existing Organization nodes.
+
+    Returns match info if found with confidence >= 0.7, None otherwise.
+    """
+    normalized = normalize_organization_name(vendor_name)
+    if not normalized:
+        return None
+
+    # Check existing Neo4j Organization nodes by normalized name
+    result = await session.run(
+        """
+        MATCH (o:Organization)
+        WHERE toUpper(o.name) CONTAINS $normalized
+           OR toUpper(o.name) STARTS WITH $prefix
+        RETURN o.id as id, o.name as name,
+               o.canada_corp_num as corp_num,
+               o.bn as bn,
+               o.ein as ein,
+               o.cik as cik
+        LIMIT 10
+        """,
+        normalized=normalized,
+        prefix=normalized[: min(10, len(normalized))],
+    )
+
+    existing_orgs = await result.data()
+
+    if existing_orgs:
+        # Use FuzzyMatcher to find best match
+        matcher = FuzzyMatcher(min_score=70)
+
+        source = MatchCandidate(
+            entity_id=UUID("00000000-0000-0000-0000-000000000000"),
+            entity_type="vendor",
+            name=vendor_name,
+            identifiers={},
+            attributes={},
+        )
+
+        candidates = [
+            MatchCandidate(
+                entity_id=(
+                    UUID(org["id"])
+                    if org["id"]
+                    else UUID("00000000-0000-0000-0000-000000000000")
+                ),
+                entity_type="organization",
+                name=org["name"],
+                identifiers={
+                    k: v
+                    for k, v in [
+                        ("bn", org.get("bn")),
+                        ("ein", org.get("ein")),
+                        ("corp_num", org.get("corp_num")),
+                        ("cik", org.get("cik")),
+                    ]
+                    if v
+                },
+                attributes={},
+            )
+            for org in existing_orgs
+        ]
+
+        matches = matcher.find_matches(source, candidates, threshold=0.7)
+
+        if matches and matches[0].confidence >= 0.7:
+            best = matches[0]
+            return {
+                "org_id": str(best.target.entity_id),
+                "org_name": best.target.name,
+                "confidence": best.confidence,
+                "match_type": "neo4j_existing",
+                "identifiers": best.target.identifiers,
+            }
+
+    return None
+
+
+async def search_vendor_in_sources(
+    vendor_name: str,
+    log,
+) -> dict | None:
+    """Search external sources for vendor information.
+
+    Returns best match if found, None otherwise.
+    """
+    try:
+        response = await search_all_sources(vendor_name, limit=5)
+
+        if not response.results:
+            return None
+
+        # Find best result using fuzzy matching
+        normalized_vendor = normalize_organization_name(vendor_name)
+
+        best_match = None
+        best_score = 0
+
+        for result in response.results:
+            normalized_result = normalize_organization_name(result.name)
+            score = fuzz.WRatio(normalized_vendor, normalized_result)
+
+            if score > best_score and score >= 75:
+                best_score = score
+                best_match = result
+
+        if best_match:
+            return {
+                "source": best_match.source,
+                "identifier": best_match.identifier,
+                "identifier_type": best_match.identifier_type,
+                "name": best_match.name,
+                "confidence": best_score / 100,
+                "details": best_match.details,
+            }
+
+    except Exception as e:
+        log.warning(f"External search failed for {vendor_name}: {e}")
+
+    return None
 
 
 class AdvertisingExpense(BaseModel):
@@ -157,6 +292,7 @@ class ElectionsCanadaIngester(BaseIngester[ElectionThirdParty]):
         super().__init__("elections_canada")
         self._http_client: httpx.AsyncClient | None = None
         self._storage: StorageClient | None = None
+        self._enrich_vendors: bool = False
 
     @property
     def http_client(self) -> httpx.AsyncClient:
@@ -239,6 +375,9 @@ class ElectionsCanadaIngester(BaseIngester[ElectionThirdParty]):
             # Check if we should parse PDFs for expense details
             parse_pdfs = config.extra_params.get("parse_pdfs", False)
 
+            # Store enrich_vendors flag for use in process_record
+            self._enrich_vendors = config.extra_params.get("enrich_vendors", False)
+
             for tp in third_parties:
                 # Optionally parse PDFs for expense and contributor details
                 if parse_pdfs and tp.pdf_links:
@@ -267,10 +406,7 @@ class ElectionsCanadaIngester(BaseIngester[ElectionThirdParty]):
                     tp.total_expenses = sum(e.amount for e in tp.expense_items)
 
                 yield tp
-                self._records_yielded += 1
-
-                if config.limit and self._records_yielded >= config.limit:
-                    return
+                # Note: Limit checking is handled by base class run() method
 
     async def _fetch_third_parties_for_election(
         self, election_id: str
@@ -599,7 +735,7 @@ class ElectionsCanadaIngester(BaseIngester[ElectionThirdParty]):
                 result["entity_id"] = str(new_id)
                 self.logger.info(f"  PostgreSQL: created entity {new_id}")
 
-            await db.commit()
+            # Note: db.commit() is handled automatically by get_db_session() context manager
 
         # --- Neo4j: Create nodes and relationships ---
         try:
@@ -791,6 +927,68 @@ class ElectionsCanadaIngester(BaseIngester[ElectionThirdParty]):
                         if total_amount <= 0:
                             continue
 
+                        # Get expense types for this supplier
+                        expense_types = list(set(
+                            e.expense_type for e in supplier_details[supplier]
+                            if e.expense_type
+                        ))
+
+                        # --- Try to resolve vendor to existing Organization ---
+                        vendor_match = await resolve_vendor_to_organization(
+                            session, supplier, self.logger
+                        )
+
+                        # If no local match and enrich_vendors is enabled, search external sources
+                        if not vendor_match and self._enrich_vendors:
+                            external_match = await search_vendor_in_sources(
+                                supplier, self.logger
+                            )
+                            if external_match:
+                                self.logger.info(
+                                    f"  Vendor '{supplier}' found in {external_match['source']} "
+                                    f"({external_match['identifier_type']}: {external_match['identifier']})"
+                                )
+                                # Store external match info for the Vendor node
+                                vendor_match = {
+                                    "org_id": None,  # Not linked yet, just metadata
+                                    "org_name": external_match["name"],
+                                    "confidence": external_match["confidence"],
+                                    "match_type": "external_search",
+                                    "external_source": external_match["source"],
+                                    "external_id": external_match["identifier"],
+                                    "external_id_type": external_match["identifier_type"],
+                                }
+
+                        if vendor_match and vendor_match["confidence"] >= 0.9 and vendor_match.get("org_id"):
+                            # HIGH CONFIDENCE: Link directly to existing Organization
+                            self.logger.info(
+                                f"  Vendor '{supplier}' matched to Organization "
+                                f"'{vendor_match['org_name']}' (confidence: {vendor_match['confidence']:.0%})"
+                            )
+
+                            # Create PAID_BY from existing Org instead of new Vendor
+                            await session.run(
+                                """
+                                MATCH (tp:Organization {name: $third_party_name})
+                                MATCH (o:Organization {id: $org_id})
+                                MERGE (o)-[r:PAID_BY {election_id: $election_id}]->(tp)
+                                ON CREATE SET r.created_at = $now
+                                SET r.amount = $amount,
+                                    r.expense_types = $expense_types,
+                                    r.source = 'elections_canada',
+                                    r.vendor_name_original = $vendor_name,
+                                    r.updated_at = $now
+                                """,
+                                third_party_name=record.third_party_name,
+                                org_id=vendor_match["org_id"],
+                                amount=float(total_amount),
+                                election_id=record.election_id,
+                                expense_types=expense_types[:5],
+                                vendor_name=supplier,
+                                now=now,
+                            )
+                            continue  # Skip Vendor node creation
+
                         # Determine vendor type based on name
                         vendor_type = "advertising"
                         if any(kw in supplier.lower() for kw in ["facebook", "meta", "google", "twitter", "x.com"]):
@@ -802,25 +1000,52 @@ class ElectionsCanadaIngester(BaseIngester[ElectionThirdParty]):
                         elif any(kw in supplier.lower() for kw in ["newspaper", "star", "globe", "post", "sun"]):
                             vendor_type = "print"
 
-                        # Get expense types for this supplier
-                        expense_types = list(set(
-                            e.expense_type for e in supplier_details[supplier]
-                            if e.expense_type
-                        ))
+                        # Build extra props for potential matches
+                        vendor_props_extra = {}
+                        if vendor_match and vendor_match["confidence"] >= 0.7:
+                            # MEDIUM CONFIDENCE: Create Vendor but add potential_match metadata
+                            if vendor_match.get("match_type") == "external_search":
+                                # External match - store source info for future enrichment
+                                self.logger.info(
+                                    f"  Vendor '{supplier}' may match '{vendor_match['org_name']}' "
+                                    f"from {vendor_match['external_source']} (confidence: {vendor_match['confidence']:.0%})"
+                                )
+                                vendor_props_extra = {
+                                    "potential_org_match": vendor_match["org_name"],
+                                    "match_confidence": vendor_match["confidence"],
+                                    "external_source": vendor_match["external_source"],
+                                    "external_id": vendor_match["external_id"],
+                                    "external_id_type": vendor_match["external_id_type"],
+                                }
+                            else:
+                                # Local match - store org ID for linking
+                                self.logger.info(
+                                    f"  Vendor '{supplier}' may match Organization "
+                                    f"'{vendor_match['org_name']}' (confidence: {vendor_match['confidence']:.0%}) - needs review"
+                                )
+                                vendor_props_extra = {
+                                    "potential_org_match": vendor_match["org_name"],
+                                    "potential_org_id": vendor_match["org_id"],
+                                    "match_confidence": vendor_match["confidence"],
+                                }
 
-                        # Create Vendor node
+                        # Create Vendor node (with optional match metadata)
                         await session.run(
                             """
                             MERGE (v:Vendor {name: $name})
                             ON CREATE SET v.id = $id,
                                           v.entity_type = 'VENDOR',
                                           v.vendor_type = $vendor_type,
+                                          v.normalized_name = $normalized,
                                           v.created_at = $now
                             ON MATCH SET v.updated_at = $now
+                            SET v += $extra_props
                             """,
                             name=supplier,
                             id=str(uuid4()),
                             vendor_type=vendor_type,
+                            normalized=normalize_organization_name(supplier),
+                            extra_props=vendor_props_extra,
                             now=now,
                         )
 
@@ -902,9 +1127,6 @@ class ElectionsCanadaIngester(BaseIngester[ElectionThirdParty]):
 
         return result
 
-    # Track records yielded for limit checking
-    _records_yielded: int = 0
-
 
 async def run_elections_canada_ingestion(
     limit: int | None = None,
@@ -912,6 +1134,7 @@ async def run_elections_canada_ingestion(
     target_entities: list[str] | None = None,
     elections: list[str] | None = None,
     parse_pdfs: bool = False,
+    enrich_vendors: bool = False,
     run_id: str | None = None,
 ) -> dict[str, Any]:
     """Run Elections Canada third party ingestion.
@@ -923,6 +1146,7 @@ async def run_elections_canada_ingestion(
         elections: Optional list of election IDs to process (e.g., ["44", "45"])
         parse_pdfs: Whether to download and parse PDF financial returns for
                     detailed expense and contributor data
+        enrich_vendors: Whether to search external sources for vendor matches
         run_id: Optional run ID from API layer
 
     Returns:
@@ -933,6 +1157,7 @@ async def run_elections_canada_ingestion(
     try:
         extra_params = {
             "parse_pdfs": parse_pdfs,
+            "enrich_vendors": enrich_vendors,
         }
         if elections:
             extra_params["elections"] = elections

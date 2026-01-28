@@ -805,4 +805,73 @@ export const runValidation = async (data: {
   return response.data;
 };
 
+// =========================
+// Settings
+// =========================
+
+export type ConnectionStatusType = 'healthy' | 'unhealthy' | 'unknown';
+
+export interface ConnectionInfo {
+  name: string;
+  status: ConnectionStatusType;
+  host: string;
+  port: number | null;
+  latency_ms: number | null;
+  error: string | null;
+}
+
+export interface DataSourceInfo {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  requires_api_key: boolean;
+  has_api_key: boolean;
+  api_key_env_var: string | null;
+  feature_flag: string | null;
+  last_successful_run: string | null;
+  records_total: number;
+}
+
+export interface APIConfigInfo {
+  environment: string;
+  api_host: string;
+  api_port: number;
+  debug_mode: boolean;
+  cors_origins: string[];
+  log_level: string;
+}
+
+export interface SettingsResponse {
+  api: APIConfigInfo;
+  connections: ConnectionInfo[];
+  data_sources: DataSourceInfo[];
+}
+
+export interface ConnectionsResponse {
+  connections: ConnectionInfo[];
+  all_healthy: boolean;
+}
+
+export interface DataSourcesResponse {
+  sources: DataSourceInfo[];
+  total_enabled: number;
+  total_disabled: number;
+}
+
+export const getSettings = async (): Promise<SettingsResponse> => {
+  const response = await apiClient.get('/settings');
+  return response.data;
+};
+
+export const getConnectionsStatus = async (): Promise<ConnectionsResponse> => {
+  const response = await apiClient.get('/settings/connections');
+  return response.data;
+};
+
+export const getDataSources = async (): Promise<DataSourcesResponse> => {
+  const response = await apiClient.get('/settings/sources');
+  return response.data;
+};
+
 export default apiClient;

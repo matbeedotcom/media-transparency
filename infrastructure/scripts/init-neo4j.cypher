@@ -193,12 +193,40 @@ CREATE INDEX rel_audited_by_election IF NOT EXISTS
 FOR ()-[r:AUDITED_BY]-() ON (r.election_id);
 
 // =========================
+// Vendor Enrichment Indexes
+// =========================
+
+// Vendor name index (for matching)
+CREATE INDEX vendor_name IF NOT EXISTS
+FOR (v:Vendor) ON (v.name);
+
+// Vendor normalized name index (for matching)
+CREATE INDEX vendor_normalized_name IF NOT EXISTS
+FOR (v:Vendor) ON (v.normalized_name);
+
+// Vendor potential match index (for finding unresolved matches)
+CREATE INDEX vendor_potential_match IF NOT EXISTS
+FOR (v:Vendor) ON (v.match_confidence);
+
+// Vendor external source index (for finding vendors needing enrichment)
+CREATE INDEX vendor_external_source IF NOT EXISTS
+FOR (v:Vendor) ON (v.external_source);
+
+// PAID_BY relationship election index
+CREATE INDEX rel_paid_by_election IF NOT EXISTS
+FOR ()-[r:PAID_BY]-() ON (r.election_id);
+
+// PAID_BY relationship amount index
+CREATE INDEX rel_paid_by_amount IF NOT EXISTS
+FOR ()-[r:PAID_BY]-() ON (r.amount);
+
+// =========================
 // Full-text search indexes
 // =========================
 
 // Full-text index for entity name search
 CREATE FULLTEXT INDEX entity_name_search IF NOT EXISTS
-FOR (n:Person|Organization|Outlet|Sponsor|Election)
+FOR (n:Person|Organization|Outlet|Sponsor|Election|Vendor)
 ON EACH [n.name];
 
 // =========================

@@ -571,6 +571,11 @@ def ingest_lobbying(
     help="Download and parse PDF financial returns for detailed expenses/suppliers",
 )
 @click.option(
+    "--enrich-vendors/--no-enrich-vendors",
+    default=False,
+    help="Search external sources (Canada Corps, SEC, CRA) for vendor matches",
+)
+@click.option(
     "--verbose",
     "-v",
     is_flag=True,
@@ -582,6 +587,7 @@ def ingest_elections_canada(
     target: str | None,
     elections: str | None,
     parse_pdfs: bool,
+    enrich_vendors: bool,
     verbose: bool,
 ):
     """Ingest Elections Canada third party data.
@@ -640,6 +646,8 @@ def ingest_elections_canada(
             click.echo(f"  Elections: {election_ids}")
         if parse_pdfs:
             click.echo("  Parse PDFs: enabled (will extract suppliers/contributors)")
+        if enrich_vendors:
+            click.echo("  Enrich vendors: enabled (will search external sources)")
 
     start_time = datetime.now()
 
@@ -651,12 +659,137 @@ def ingest_elections_canada(
                 target_entities=target_entities,
                 elections=election_ids,
                 parse_pdfs=parse_pdfs,
+                enrich_vendors=enrich_vendors,
             )
         )
 
         duration = (datetime.now() - start_time).total_seconds()
 
         _print_result(result, duration, verbose)
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        if verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
+@cli.command(name="littlesis")
+@click.option(
+    "--entities/--no-entities",
+    default=True,
+    help="Ingest entities (default: yes)",
+)
+@click.option(
+    "--relationships/--no-relationships",
+    default=True,
+    help="Ingest relationships (default: yes)",
+)
+@click.option(
+    "--force-refresh",
+    is_flag=True,
+    help="Force re-download of bulk data files even if cached",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum number of records to process",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Enable verbose output",
+)
+def ingest_littlesis(
+    entities: bool,
+    relationships: bool,
+    force_refresh: bool,
+    limit: int | None,
+    verbose: bool,
+):
+    """Ingest LittleSis bulk data (entities and relationships).
+
+    Downloads and processes the LittleSis bulk data exports containing
+    curated data on U.S. political and corporate power structures.
+
+    Data is cached locally and in S3 for 7 days before re-downloading.
+
+    Creates:
+    - Person and Organization entities from LittleSis
+    - Relationships: FUNDED_BY, DIRECTOR_OF, EMPLOYED_BY, OWNS
+
+    License: CC BY-SA 4.0 (attribution required)
+
+    Examples:
+
+        # Full import (entities + relationships)
+        mitds ingest littlesis
+
+        # Entities only
+        mitds ingest littlesis --no-relationships
+
+        # Force fresh download
+        mitds ingest littlesis --force-refresh
+
+        # Test with limited records
+        mitds ingest littlesis --limit 1000 --verbose
+    """
+    from ..ingestion.littlesis import run_littlesis_ingestion, get_littlesis_stats
+
+    click.echo("Starting LittleSis bulk data ingestion...")
+
+    if verbose:
+        click.echo(f"  Entities: {'yes' if entities else 'no'}")
+        click.echo(f"  Relationships: {'yes' if relationships else 'no'}")
+        click.echo(f"  Force refresh: {'yes' if force_refresh else 'no'}")
+        if limit:
+            click.echo(f"  Limit: {limit} records")
+
+    start_time = datetime.now()
+
+    # Combine stats + ingestion in single async function to avoid event loop issues
+    async def _run_with_stats():
+        stats = None
+        if verbose:
+            try:
+                stats = await get_littlesis_stats()
+            except Exception:
+                pass
+        
+        result = await run_littlesis_ingestion(
+            entities=entities,
+            relationships=relationships,
+            force_refresh=force_refresh,
+            limit=limit,
+        )
+        return stats, result
+
+    try:
+        stats, result = asyncio.run(_run_with_stats())
+        
+        if verbose and stats:
+            click.echo(f"\nPre-ingestion cache status:")
+            click.echo(f"  Cache valid: {stats.get('cache_valid', False)}")
+            click.echo(f"  Entities in DB: {stats.get('entity_count', 0)}")
+            click.echo(f"  Relationships in DB: {stats.get('relationship_count', 0)}")
+
+        duration = (datetime.now() - start_time).total_seconds()
+
+        click.echo("\n" + "=" * 40)
+        click.secho("LittleSis Ingestion Complete", fg="green")
+        click.echo("=" * 40)
+        click.echo(f"Duration: {duration:.1f} seconds")
+
+        if result.get("entities"):
+            click.echo("\nEntities:")
+            _print_result(result["entities"], 0, verbose)
+
+        if result.get("relationships"):
+            click.echo("\nRelationships:")
+            _print_result(result["relationships"], 0, verbose)
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
@@ -695,7 +828,7 @@ def ingestion_status():
         click.echo("\nIngestion Pipeline Status")
         click.echo("=" * 60)
 
-        sources = ["irs990", "cra", "sec_edgar", "canada_corps", "opencorporates", "meta_ads", "lobbying", "elections_canada"]
+        sources = ["irs990", "cra", "sec_edgar", "canada_corps", "opencorporates", "meta_ads", "lobbying", "elections_canada", "littlesis"]
         run_by_source = {r.source: r for r in runs}
 
         for source in sources:
@@ -746,10 +879,15 @@ def _print_result(result: dict[str, Any], duration: float, verbose: bool):
 
     errors = result.get("errors", [])
     if errors:
-        click.echo(f"\nErrors: {len(errors)}")
-        if verbose:
+        # errors can be an integer (count) or a list (actual error objects)
+        error_count = errors if isinstance(errors, int) else len(errors)
+        click.echo(f"\nErrors: {error_count}")
+        if verbose and isinstance(errors, list):
             for i, error in enumerate(errors[:10], 1):
-                click.echo(f"  {i}. {error.get('error', 'Unknown error')}")
+                if isinstance(error, dict):
+                    click.echo(f"  {i}. {error.get('error', 'Unknown error')}")
+                else:
+                    click.echo(f"  {i}. {error}")
             if len(errors) > 10:
                 click.echo(f"  ... and {len(errors) - 10} more")
 

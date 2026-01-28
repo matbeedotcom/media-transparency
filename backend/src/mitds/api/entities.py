@@ -330,17 +330,29 @@ async def get_entity_relationships(
                 except ValueError:
                     rel_id = None
 
+            # Parse entity IDs - skip relationships with invalid UUIDs
+            try:
+                source_id = UUID(str(record["source_id"])) if record.get("source_id") else None
+                target_id = UUID(str(record["target_id"])) if record.get("target_id") else None
+            except ValueError:
+                # Skip relationships where entity IDs aren't valid UUIDs
+                continue
+
+            if source_id is None or target_id is None:
+                # Skip relationships with missing entity IDs
+                continue
+
             relationships.append(
                 RelationshipResponse(
                     id=rel_id,
                     rel_type=record.get("rel_type", ""),
                     source_entity=EntitySummary(
-                        id=UUID(record["source_id"]),
+                        id=source_id,
                         entity_type=EntityType(record.get("source_type", "ORGANIZATION")),
                         name=record.get("source_name", "Unknown"),
                     ),
                     target_entity=EntitySummary(
-                        id=UUID(record["target_id"]),
+                        id=target_id,
                         entity_type=EntityType(record.get("target_type", "ORGANIZATION")),
                         name=record.get("target_name", "Unknown"),
                     ),
