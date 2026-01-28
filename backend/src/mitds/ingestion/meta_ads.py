@@ -9,12 +9,15 @@ Key data points:
 - Impressions range
 - Demographic breakdown
 
-Data source: https://graph.facebook.com/v18.0/ads_archive
+Data source: https://graph.facebook.com/v24.0/ads_archive
 Coverage: Political/social issue ads in US and Canada
 Rate limits: 200 calls/hour per app
+
+API Docs: https://developers.facebook.com/docs/graph-api/reference/ads_archive/
 """
 
 import asyncio
+import json
 from datetime import datetime, timedelta
 from typing import Any, AsyncIterator
 from uuid import UUID, uuid4
@@ -30,14 +33,24 @@ from .base import BaseIngester, IngestionConfig, RetryConfig, with_retry
 
 logger = get_context_logger(__name__)
 
-# Meta Graph API base URL
-META_GRAPH_API_BASE = "https://graph.facebook.com/v18.0"
+# Meta Graph API base URL (v24.0 as of Jan 2026)
+META_GRAPH_API_BASE = "https://graph.facebook.com/v24.0"
 META_ADS_ARCHIVE_ENDPOINT = f"{META_GRAPH_API_BASE}/ads_archive"
 
 # Supported countries for political ads
 SUPPORTED_COUNTRIES = ["US", "CA"]
 
-# Default fields to request
+# Minimal fields for basic functionality (use if full fields cause issues)
+MINIMAL_AD_FIELDS = [
+    "id",
+    "ad_creation_time",
+    "ad_delivery_start_time",
+    "page_id",
+    "page_name",
+]
+
+# Default fields to request (per ArchivedAd schema)
+# Note: estimated_audience_size is a query PARAMETER, not a return field
 DEFAULT_AD_FIELDS = [
     "id",
     "ad_creation_time",
@@ -52,7 +65,6 @@ DEFAULT_AD_FIELDS = [
     "currency",
     "delivery_by_region",
     "demographic_distribution",
-    "estimated_audience_size",
     "impressions",
     "languages",
     "page_id",
@@ -275,6 +287,7 @@ class MetaAdIngester(BaseIngester[MetaAdRecord]):
         countries = config.extra_params.get("countries", SUPPORTED_COUNTRIES)
         search_terms = config.extra_params.get("search_terms")
         page_ids = config.extra_params.get("page_ids")
+        minimal_fields = config.extra_params.get("minimal_fields", False)
 
         self.logger.info(
             f"Fetching ads from {start_date.date()} to {end_date.date()} "
@@ -290,6 +303,7 @@ class MetaAdIngester(BaseIngester[MetaAdRecord]):
                 search_terms=search_terms,
                 page_ids=page_ids,
                 config=config,
+                minimal_fields=minimal_fields,
             ):
                 yield ad
 
@@ -302,6 +316,7 @@ class MetaAdIngester(BaseIngester[MetaAdRecord]):
         search_terms: list[str] | None = None,
         page_ids: list[str] | None = None,
         config: IngestionConfig | None = None,
+        minimal_fields: bool = False,
     ) -> AsyncIterator[MetaAdRecord]:
         """Fetch ads for a specific country."""
 
@@ -309,21 +324,37 @@ class MetaAdIngester(BaseIngester[MetaAdRecord]):
         # We'll use a conservative delay between pagination calls
         rate_limit_delay = 0.5  # seconds
 
+        # Use minimal fields if requested (for debugging permission issues)
+        fields = MINIMAL_AD_FIELDS if minimal_fields else DEFAULT_AD_FIELDS
+        if minimal_fields:
+            self.logger.info("Using minimal fields for debugging")
+
         params = {
             "access_token": access_token,
-            "ad_reached_countries": country,
+            # Meta API expects array format like ['US'] with single quotes inside
+            # Using Python list repr gives us this format
+            "ad_reached_countries": f"['{country}']",
             "ad_type": "POLITICAL_AND_ISSUE_ADS",
             "ad_active_status": "ALL",
-            "fields": ",".join(DEFAULT_AD_FIELDS),
+            "fields": ",".join(fields),
             "limit": 100,  # Max per page
         }
 
-        # Add optional filters
+        # Meta Ad Library API requires EITHER search_terms OR search_page_ids
+        # Cannot query all ads without search criteria
+        # Note: Meta's API expects search_terms with single quotes: 'california'
         if search_terms:
-            params["search_terms"] = search_terms[0]  # API only supports one term
-
-        if page_ids:
+            params["search_terms"] = f"'{search_terms[0]}'"  # API expects single quotes
+        elif page_ids:
+            # search_page_ids expects comma-separated list of IDs
             params["search_page_ids"] = ",".join(page_ids)
+        else:
+            # No search criteria provided - this will fail
+            # Meta requires either search_terms or search_page_ids
+            raise ValueError(
+                "Meta Ad Library API requires either --search-terms or --page-ids. "
+                "Example: mitds ingest meta-ads --search-terms 'election'"
+            )
 
         # Date filter using ad_delivery_date_min/max
         params["ad_delivery_date_min"] = start_date.strftime("%Y-%m-%d")
@@ -341,6 +372,21 @@ class MetaAdIngester(BaseIngester[MetaAdRecord]):
                     else:
                         # Pagination URL already includes params
                         response = await self.http_client.get(next_url)
+                    
+                    # Check for errors and log Meta's response before raising
+                    if response.status_code >= 400:
+                        try:
+                            error_data = response.json()
+                            error_info = error_data.get("error", {})
+                            self.logger.error(
+                                f"Meta API returned {response.status_code}: "
+                                f"code={error_info.get('code')}, "
+                                f"type={error_info.get('type')}, "
+                                f"message={error_info.get('message')}"
+                            )
+                        except Exception:
+                            self.logger.error(f"Meta API returned {response.status_code}: {response.text[:500]}")
+                    
                     response.raise_for_status()
                     return response.json()
 
@@ -387,11 +433,17 @@ class MetaAdIngester(BaseIngester[MetaAdRecord]):
                     await asyncio.sleep(60)
                     continue
                 elif e.response.status_code == 400:
-                    # Bad request - log error details
-                    error_data = e.response.json() if e.response.content else {}
-                    self.logger.error(
-                        f"Meta API error: {error_data.get('error', {}).get('message', str(e))}"
-                    )
+                    # Bad request - log full error details from Meta
+                    try:
+                        error_data = e.response.json() if e.response.content else {}
+                        error_msg = error_data.get("error", {}).get("message", str(e))
+                        error_code = error_data.get("error", {}).get("code", "unknown")
+                        error_subcode = error_data.get("error", {}).get("error_subcode", "")
+                        self.logger.error(
+                            f"Meta API error (code={error_code}, subcode={error_subcode}): {error_msg}"
+                        )
+                    except Exception:
+                        self.logger.error(f"Meta API error: {e}")
                     break
                 else:
                     raise
@@ -712,6 +764,7 @@ async def run_meta_ads_ingestion(
     limit: int | None = None,
     search_terms: list[str] | None = None,
     page_ids: list[str] | None = None,
+    minimal_fields: bool = False,
 ) -> dict[str, Any]:
     """Run Meta Ad Library ingestion directly (not via Celery).
 
@@ -722,6 +775,7 @@ async def run_meta_ads_ingestion(
         limit: Maximum number of records to process
         search_terms: Optional search terms to filter ads
         page_ids: Optional page IDs to filter ads
+        minimal_fields: Use minimal fields for debugging permission issues
 
     Returns:
         Ingestion result dictionary
@@ -737,6 +791,7 @@ async def run_meta_ads_ingestion(
                 "countries": countries or SUPPORTED_COUNTRIES,
                 "search_terms": search_terms,
                 "page_ids": page_ids,
+                "minimal_fields": minimal_fields,
             },
         )
         result = await ingester.run(config)

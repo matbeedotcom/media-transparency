@@ -675,6 +675,155 @@ def ingest_elections_canada(
         sys.exit(1)
 
 
+@cli.command(name="meta-ads")
+@click.option(
+    "--days-back",
+    type=int,
+    default=7,
+    help="Number of days to look back (default: 7)",
+)
+@click.option(
+    "--countries",
+    type=str,
+    default=None,
+    help="Comma-separated country codes (default: US,CA)",
+)
+@click.option(
+    "--search-terms",
+    type=str,
+    default=None,
+    help="Comma-separated search terms to filter ads",
+)
+@click.option(
+    "--page-ids",
+    type=str,
+    default=None,
+    help="Comma-separated Meta page IDs to filter ads",
+)
+@click.option(
+    "--incremental/--full",
+    default=True,
+    help="Incremental or full sync (default: incremental)",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum number of ads to process",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Enable verbose output",
+)
+@click.option(
+    "--minimal-fields",
+    is_flag=True,
+    help="Use minimal fields (for debugging permission issues)",
+)
+def ingest_meta_ads(
+    days_back: int,
+    countries: str | None,
+    search_terms: str | None,
+    page_ids: str | None,
+    incremental: bool,
+    limit: int | None,
+    verbose: bool,
+    minimal_fields: bool,
+):
+    """Ingest political ads from Meta Ad Library.
+
+    Fetches political and social issue ads from Meta's Ad Library API
+    for the US and Canada. Creates Ad nodes, Sponsor entities, and
+    SPONSORED_BY relationships.
+
+    Requires META_ACCESS_TOKEN environment variable (or META_APP_ID +
+    META_APP_SECRET for token refresh). Your app must also have completed
+    Meta's App Review for the ads_read permission.
+
+    Rate limited to 200 calls/hour by Meta.
+
+    Examples:
+
+        # Search for election-related ads (search term required)
+        mitds ingest meta-ads --search-terms "election"
+
+        # Fetch last 30 days
+        mitds ingest meta-ads --search-terms "vote" --days-back 30
+
+        # Filter by country
+        mitds ingest meta-ads --search-terms "candidate" --countries US
+
+        # Filter by page ID (alternative to search terms)
+        mitds ingest meta-ads --page-ids "123456789,987654321"
+
+        # Debug permission issues with minimal fields
+        mitds ingest meta-ads --search-terms "test" --minimal-fields --limit 5
+    """
+    from ..ingestion.meta_ads import run_meta_ads_ingestion
+
+    click.echo("Starting Meta Ad Library ingestion...")
+
+    countries_list = None
+    if countries:
+        countries_list = [c.strip() for c in countries.split(",")]
+
+    search_terms_list = None
+    if search_terms:
+        search_terms_list = [t.strip() for t in search_terms.split(",")]
+
+    page_ids_list = None
+    if page_ids:
+        page_ids_list = [p.strip() for p in page_ids.split(",")]
+
+    if verbose:
+        click.echo(f"  Days back: {days_back}")
+        click.echo(f"  Countries: {countries_list or ['US', 'CA']}")
+        click.echo(f"  Mode: {'incremental' if incremental else 'full'}")
+        if search_terms_list:
+            click.echo(f"  Search terms: {search_terms_list}")
+        if page_ids_list:
+            click.echo(f"  Page IDs: {page_ids_list}")
+        if limit:
+            click.echo(f"  Limit: {limit} ads")
+        if minimal_fields:
+            click.echo("  Minimal fields: enabled (debugging mode)")
+
+    start_time = datetime.now()
+
+    try:
+        result = asyncio.run(
+            run_meta_ads_ingestion(
+                countries=countries_list,
+                days_back=days_back,
+                incremental=incremental,
+                limit=limit,
+                search_terms=search_terms_list,
+                page_ids=page_ids_list,
+                minimal_fields=minimal_fields,
+            )
+        )
+
+        duration = (datetime.now() - start_time).total_seconds()
+
+        _print_result(result, duration, verbose)
+
+    except ValueError as e:
+        # Likely missing credentials
+        click.echo(f"Configuration error: {e}", err=True)
+        click.echo("\nTo use the Meta Ad Library API, set one of:", err=True)
+        click.echo("  - META_ACCESS_TOKEN (recommended)", err=True)
+        click.echo("  - META_APP_ID + META_APP_SECRET", err=True)
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        if verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
 @cli.command(name="littlesis")
 @click.option(
     "--entities/--no-entities",

@@ -74,26 +74,158 @@ from ..logging import get_context_logger, log_ingestion_start, log_ingestion_com
 
 @contextmanager
 def suppress_db_logging():
-    """Temporarily suppress SQLAlchemy and other verbose logging for clean tqdm output."""
+    """Temporarily suppress SQLAlchemy and other verbose logging for clean tqdm output.
+
+    This suppresses:
+    - SQLAlchemy engine echo output
+    - SQLAlchemy loggers
+    - Neo4j, httpx, and other verbose loggers
+    """
     loggers_to_suppress = [
         "sqlalchemy.engine.Engine",
+        "sqlalchemy.engine",
         "sqlalchemy.pool",
+        "sqlalchemy.orm",
+        "sqlalchemy",
         "neo4j",
         "httpx",
         "httpcore",
+        "aiosqlite",
+        "asyncpg",
     ]
 
-    original_levels = {}
+    original_state = {}
     for logger_name in loggers_to_suppress:
         logger = logging.getLogger(logger_name)
-        original_levels[logger_name] = logger.level
-        logger.setLevel(logging.WARNING)
+        original_state[logger_name] = {
+            "level": logger.level,
+            "disabled": logger.disabled,
+            "handlers": [(h, h.level) for h in logger.handlers],
+        }
+        # Set to CRITICAL to suppress everything except critical errors
+        logger.setLevel(logging.CRITICAL)
+        logger.disabled = True
+        # Also set all handlers to CRITICAL
+        for handler in logger.handlers:
+            handler.setLevel(logging.CRITICAL)
+
+    # Also suppress SQLAlchemy engine echo
+    previous_echo_suppressed = None
+    try:
+        from ..db import set_echo_suppressed
+        previous_echo_suppressed = set_echo_suppressed(True)
+    except ImportError:
+        pass
 
     try:
         yield
     finally:
-        for logger_name, level in original_levels.items():
-            logging.getLogger(logger_name).setLevel(level)
+        # Restore logger state
+        for logger_name, state in original_state.items():
+            logger = logging.getLogger(logger_name)
+            logger.setLevel(state["level"])
+            logger.disabled = state["disabled"]
+            for handler, level in state["handlers"]:
+                handler.setLevel(level)
+
+        # Restore engine echo suppression
+        if previous_echo_suppressed is not None:
+            try:
+                from ..db import set_echo_suppressed
+                set_echo_suppressed(previous_echo_suppressed)
+            except ImportError:
+                pass
+
+
+def create_progress_bar(
+    desc: str,
+    total: int | None = None,
+    unit: str = "rec",
+    leave: bool = True,
+) -> tqdm:
+    """Create a tqdm progress bar with consistent styling.
+
+    Args:
+        desc: Description shown on the left
+        total: Total count (None for unknown)
+        unit: Unit label (e.g., "rec", "KB", "files")
+        leave: Whether to leave the bar visible after completion
+
+    Returns:
+        tqdm progress bar instance
+
+    Usage:
+        pbar = create_progress_bar("Downloading entities", total=1000, unit="KB")
+        for chunk in download_stream():
+            pbar.update(len(chunk))
+        pbar.close()
+    """
+    return tqdm(
+        total=total,
+        desc=desc,
+        unit=unit,
+        dynamic_ncols=True,
+        file=sys.stderr,
+        leave=leave,
+    )
+
+
+async def download_with_progress(
+    url: str,
+    desc: str = "Downloading",
+    httpx_client=None,
+) -> bytes:
+    """Download a file with progress bar.
+
+    Args:
+        url: URL to download
+        desc: Progress bar description
+        httpx_client: Optional httpx.AsyncClient (creates one if not provided)
+
+    Returns:
+        Downloaded content as bytes
+
+    Usage:
+        content = await download_with_progress(
+            "https://example.com/data.json.gz",
+            desc="Downloading entities"
+        )
+    """
+    import httpx
+
+    close_client = False
+    if httpx_client is None:
+        httpx_client = httpx.AsyncClient(timeout=httpx.Timeout(300.0))
+        close_client = True
+
+    try:
+        async with httpx_client.stream("GET", url) as response:
+            response.raise_for_status()
+            total = int(response.headers.get("content-length", 0))
+
+            with suppress_db_logging():
+                pbar = tqdm(
+                    total=total if total else None,
+                    desc=desc,
+                    unit="B",
+                    unit_scale=True,
+                    unit_divisor=1024,
+                    dynamic_ncols=True,
+                    file=sys.stderr,
+                )
+
+                chunks = []
+                try:
+                    async for chunk in response.aiter_bytes(chunk_size=8192):
+                        chunks.append(chunk)
+                        pbar.update(len(chunk))
+                finally:
+                    pbar.close()
+
+            return b"".join(chunks)
+    finally:
+        if close_client:
+            await httpx_client.aclose()
 
 # Type variable for ingested record type
 T = TypeVar("T", bound=BaseModel)
@@ -258,63 +390,84 @@ class BaseIngester(ABC, Generic[T]):
                             f"Incremental sync from {last_sync.isoformat()}"
                         )
 
-                # Process records
-                async for record in self.fetch_records(config):
-                    record_name = getattr(record, "name", None) or getattr(record, "corporation_name", None) or getattr(record, "id", "unknown")
+                # Use tqdm for progress tracking with suppressed verbose logging
+                total = config.limit if config.limit else None
+                desc = f"Ingesting {self.source_name}"
+
+                with suppress_db_logging():
+                    pbar = tqdm(
+                        total=total,
+                        desc=desc,
+                        unit="rec",
+                        dynamic_ncols=True,
+                        file=sys.stderr,
+                    )
+
                     try:
-                        process_result = await self.process_record(record)
-                        result.records_processed += 1
+                        async for record in self.fetch_records(config):
+                            record_name = getattr(record, "name", None) or getattr(record, "corporation_name", None) or getattr(record, "id", "unknown")
+                            try:
+                                process_result = await self.process_record(record)
+                                result.records_processed += 1
 
-                        if process_result.get("created"):
-                            result.records_created += 1
-                            action = "created"
-                        elif process_result.get("updated"):
-                            result.records_updated += 1
-                            action = "updated"
-                        elif process_result.get("duplicate"):
-                            result.duplicates_found += 1
-                            action = "skipped (duplicate)"
-                        else:
-                            action = "processed"
+                                if process_result.get("created"):
+                                    result.records_created += 1
+                                elif process_result.get("updated"):
+                                    result.records_updated += 1
+                                elif process_result.get("duplicate"):
+                                    result.duplicates_found += 1
 
-                        entity_id = process_result.get("entity_id", "")
-                        self.logger.info(
-                            f"[{result.records_processed}] {action}: {record_name}"
-                            + (f" (entity={entity_id})" if entity_id else "")
-                        )
+                                # Update progress bar with current stats
+                                pbar.set_postfix(
+                                    created=result.records_created,
+                                    updated=result.records_updated,
+                                    dup=result.duplicates_found,
+                                    err=len(result.errors),
+                                    refresh=False,
+                                )
+                                pbar.update(1)
 
-                        # Progress update every 100 records
-                        if result.records_processed % 100 == 0:
-                            self.logger.info(
-                                f"Progress: {result.records_processed} processed, "
-                                f"{result.records_created} created, "
-                                f"{result.records_updated} updated, "
-                                f"{result.duplicates_found} duplicates, "
-                                f"{len(result.errors)} errors"
-                            )
+                                # Check limit
+                                if config.limit and result.records_processed >= config.limit:
+                                    pbar.set_description(f"{desc} (limit reached)")
+                                    break
 
-                        # Check limit
-                        if config.limit and result.records_processed >= config.limit:
-                            self.logger.info(f"Reached limit of {config.limit} records")
-                            break
+                            except Exception as e:
+                                result.records_processed += 1
+                                error_info = {
+                                    "record_id": getattr(record, "id", None),
+                                    "error": str(e),
+                                    "error_type": type(e).__name__,
+                                }
+                                result.errors.append(error_info)
 
-                    except Exception as e:
-                        result.records_processed += 1
-                        error_info = {
-                            "record_id": getattr(record, "id", None),
-                            "error": str(e),
-                            "error_type": type(e).__name__,
-                        }
-                        result.errors.append(error_info)
-                        self.logger.warning(
-                            f"[{result.records_processed}] FAILED: {record_name} — {e}",
-                            extra=error_info,
-                        )
+                                # Update progress bar even on error
+                                pbar.set_postfix(
+                                    created=result.records_created,
+                                    updated=result.records_updated,
+                                    dup=result.duplicates_found,
+                                    err=len(result.errors),
+                                    refresh=False,
+                                )
+                                pbar.update(1)
 
-                        # Continue processing other records
-                        continue
+                                # Continue processing other records
+                                continue
+                    finally:
+                        pbar.close()
 
-                # Summary
+                # Print summary after progress bar
+                print(
+                    f"\n{self.source_name} ingestion complete:\n"
+                    f"  Processed: {result.records_processed}\n"
+                    f"  Created:   {result.records_created}\n"
+                    f"  Updated:   {result.records_updated}\n"
+                    f"  Duplicates:{result.duplicates_found}\n"
+                    f"  Errors:    {len(result.errors)}",
+                    file=sys.stderr,
+                )
+
+                # Log to capture (for API/logs)
                 self.logger.info(
                     f"Ingestion complete: {result.records_processed} processed, "
                     f"{result.records_created} created, {result.records_updated} updated, "

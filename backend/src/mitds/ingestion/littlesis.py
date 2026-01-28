@@ -17,10 +17,13 @@ License: CC BY-SA 4.0
 import asyncio
 import gzip
 import json
+import sys
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Any, AsyncIterator
 from uuid import uuid4, UUID
+
+from tqdm import tqdm
 
 import httpx
 from pydantic import BaseModel, Field
@@ -30,7 +33,14 @@ from ..config import get_settings
 from ..db import get_db_session, get_neo4j_session, get_redis
 from ..logging import get_context_logger
 from ..storage import StorageClient, get_storage
-from .base import BaseIngester, IngestionConfig, IngestionResult, Neo4jHelper
+from .base import (
+    BaseIngester,
+    IngestionConfig,
+    IngestionResult,
+    Neo4jHelper,
+    suppress_db_logging,
+    create_progress_bar,
+)
 
 logger = get_context_logger(__name__)
 
@@ -322,25 +332,46 @@ class LittleSisCacheManager:
         local_filename: str,
     ) -> Path:
         """Download a file and cache it locally and in S3.
-        
+
         Args:
             url: URL to download from
             storage_key: S3 storage key
             local_filename: Local cache filename
-            
+
         Returns:
             Path to local cached file
         """
         self._ensure_local_cache_dir()
         local_path = self._local_cache_dir / local_filename
-        
-        logger.info(f"Downloading {url}...")
-        
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            response = await client.get(url, follow_redirects=True)
-            response.raise_for_status()
-            data = response.content
-        
+
+        # Download with progress bar
+        async with httpx.AsyncClient(timeout=httpx.Timeout(300.0)) as client:
+            async with client.stream("GET", url, follow_redirects=True) as response:
+                response.raise_for_status()
+                total = int(response.headers.get("content-length", 0))
+
+                desc = f"Downloading {local_filename}"
+                with suppress_db_logging():
+                    pbar = tqdm(
+                        total=total if total else None,
+                        desc=desc,
+                        unit="B",
+                        unit_scale=True,
+                        unit_divisor=1024,
+                        dynamic_ncols=True,
+                        file=sys.stderr,
+                    )
+
+                    chunks = []
+                    try:
+                        async for chunk in response.aiter_bytes(chunk_size=8192):
+                            chunks.append(chunk)
+                            pbar.update(len(chunk))
+                    finally:
+                        pbar.close()
+
+                data = b"".join(chunks)
+
         # Save to local cache
         local_path.write_bytes(data)
         logger.info(f"Cached locally: {local_path} ({len(data) / 1024 / 1024:.1f} MB)")
@@ -878,7 +909,7 @@ class LittleSisIngester(BaseIngester[LittleSisEntity]):
                         "metadata": json.dumps(entity_data.get("metadata", {})),
                     },
                 )
-                await db.commit()
+                # Note: db.commit() is handled automatically by get_db_session() context manager
 
                 # Track mapping
                 self.parser.entity_id_map[record.id] = entity_id
@@ -1082,139 +1113,183 @@ class LittleSisIngester(BaseIngester[LittleSisEntity]):
         config: IngestionConfig | None = None,
     ) -> IngestionResult:
         """Ingest relationships after entities are loaded.
-        
+
         Args:
             config: Ingestion configuration
-            
+
         Returns:
             Ingestion result
         """
         if config is None:
             config = IngestionConfig()
-        
+
         result = IngestionResult(
             run_id=uuid4(),
             source=f"{self.source_name}_relationships",
             status="running",
             started_at=datetime.utcnow(),
         )
-        
+
         force_refresh = config.extra_params.get("force_refresh", False)
-        
+
         try:
             # Get relationships file
             relationships_path = await self.cache_manager.get_relationships_file(
                 force_refresh=force_refresh
             )
-            
+
             # Build entity ID map if not already populated
             if not self.parser.entity_id_map:
                 await self._load_entity_id_map()
-            
-            async with get_db_session() as db:
-                for rel in self.parser.iter_relationships(relationships_path):
-                    result.records_processed += 1
-                    
-                    try:
-                        # Get MITDS UUIDs for entities
-                        source_uuid = self.parser.entity_id_map.get(rel.entity1_id)
-                        target_uuid = self.parser.entity_id_map.get(rel.entity2_id)
-                        
-                        if not source_uuid or not target_uuid:
-                            # Entities not yet imported
-                            continue
-                        
-                        # Convert relationship
-                        rel_data = self.parser.relationship_to_dict(
-                            rel, source_uuid, target_uuid
-                        )
-                        
-                        if not rel_data:
-                            # Relationship type not mappable
-                            continue
-                        
-                        # Check for existing relationship
-                        check_query = text("""
-                            SELECT id FROM relationships
-                            WHERE properties->>'littlesis_id' = :littlesis_id
-                        """)
-                        existing = await db.execute(
-                            check_query,
-                            {"littlesis_id": str(rel.id)},
-                        )
-                        
-                        if existing.fetchone():
-                            result.duplicates_found += 1
-                            continue
-                        
-                        # Insert relationship
-                        insert_query = text("""
-                            INSERT INTO relationships (
-                                id, relationship_type, from_entity_id, to_entity_id,
-                                start_date, end_date, is_current, confidence,
-                                properties, created_at
-                            ) VALUES (
-                                :id, :rel_type, :from_id, :to_id,
-                                :start_date, :end_date, :is_current, :confidence,
-                                :properties, :created_at
-                            )
-                        """)
-                        
-                        await db.execute(
-                            insert_query,
-                            {
-                                "id": uuid4(),
-                                "rel_type": rel_data["rel_type"],
-                                "from_id": rel_data["source_entity_id"],
-                                "to_id": rel_data["target_entity_id"],
-                                "start_date": rel_data["valid_from"],
-                                "end_date": rel_data["valid_to"],
-                                "is_current": rel_data["is_current"],
-                                "confidence": rel_data["confidence"],
-                                "properties": json.dumps(rel_data["properties"]),
-                                "created_at": datetime.utcnow(),
-                            },
-                        )
-                        
-                        # Sync to Neo4j
-                        try:
-                            await self._sync_relationship_to_neo4j(rel, rel_data)
-                        except Exception as neo4j_err:
-                            self.logger.warning(
-                                f"Neo4j sync failed for relationship {rel.id}: {neo4j_err}"
-                            )
-                        
-                        result.records_created += 1
-                        
-                        # Progress logging
-                        if result.records_processed % 1000 == 0:
-                            self.logger.info(
-                                f"Relationships progress: {result.records_processed} processed, "
-                                f"{result.records_created} created"
-                            )
-                        
-                        # Check limit
-                        if config.limit and result.records_created >= config.limit:
-                            break
-                    
-                    except Exception as e:
-                        result.errors.append({
-                            "relationship_id": rel.id,
-                            "error": str(e),
-                        })
-                        continue
 
-                # Note: db.commit() is handled automatically by get_db_session() context manager
-            
+            total = config.limit if config.limit else None
+            desc = "Ingesting relationships"
+
+            with suppress_db_logging():
+                pbar = tqdm(
+                    total=total,
+                    desc=desc,
+                    unit="rel",
+                    dynamic_ncols=True,
+                    file=sys.stderr,
+                )
+
+                try:
+                    async with get_db_session() as db:
+                        for rel in self.parser.iter_relationships(relationships_path):
+                            result.records_processed += 1
+
+                            try:
+                                # Get MITDS UUIDs for entities
+                                source_uuid = self.parser.entity_id_map.get(rel.entity1_id)
+                                target_uuid = self.parser.entity_id_map.get(rel.entity2_id)
+
+                                if not source_uuid or not target_uuid:
+                                    # Entities not yet imported
+                                    pbar.update(1)
+                                    continue
+
+                                # Convert relationship
+                                rel_data = self.parser.relationship_to_dict(
+                                    rel, source_uuid, target_uuid
+                                )
+
+                                if not rel_data:
+                                    # Relationship type not mappable
+                                    pbar.update(1)
+                                    continue
+
+                                # Check for existing relationship
+                                check_query = text("""
+                                    SELECT id FROM relationships
+                                    WHERE properties->>'littlesis_id' = :littlesis_id
+                                """)
+                                existing = await db.execute(
+                                    check_query,
+                                    {"littlesis_id": str(rel.id)},
+                                )
+
+                                if existing.fetchone():
+                                    result.duplicates_found += 1
+                                    pbar.set_postfix(
+                                        created=result.records_created,
+                                        dup=result.duplicates_found,
+                                        err=len(result.errors),
+                                        refresh=False,
+                                    )
+                                    pbar.update(1)
+                                    continue
+
+                                # Insert relationship
+                                insert_query = text("""
+                                    INSERT INTO relationships (
+                                        id, relationship_type, from_entity_id, to_entity_id,
+                                        start_date, end_date, is_current, confidence,
+                                        properties, created_at
+                                    ) VALUES (
+                                        :id, :rel_type, :from_id, :to_id,
+                                        :start_date, :end_date, :is_current, :confidence,
+                                        :properties, :created_at
+                                    )
+                                """)
+
+                                await db.execute(
+                                    insert_query,
+                                    {
+                                        "id": uuid4(),
+                                        "rel_type": rel_data["rel_type"],
+                                        "from_id": rel_data["source_entity_id"],
+                                        "to_id": rel_data["target_entity_id"],
+                                        "start_date": rel_data["valid_from"],
+                                        "end_date": rel_data["valid_to"],
+                                        "is_current": rel_data["is_current"],
+                                        "confidence": rel_data["confidence"],
+                                        "properties": json.dumps(rel_data["properties"]),
+                                        "created_at": datetime.utcnow(),
+                                    },
+                                )
+
+                                # Sync to Neo4j
+                                try:
+                                    await self._sync_relationship_to_neo4j(rel, rel_data)
+                                except Exception as neo4j_err:
+                                    self.logger.warning(
+                                        f"Neo4j sync failed for relationship {rel.id}: {neo4j_err}"
+                                    )
+
+                                result.records_created += 1
+
+                                # Update progress bar
+                                pbar.set_postfix(
+                                    created=result.records_created,
+                                    dup=result.duplicates_found,
+                                    err=len(result.errors),
+                                    refresh=False,
+                                )
+                                pbar.update(1)
+
+                                # Check limit
+                                if config.limit and result.records_created >= config.limit:
+                                    pbar.set_description(f"{desc} (limit reached)")
+                                    break
+
+                            except Exception as e:
+                                result.errors.append({
+                                    "relationship_id": rel.id,
+                                    "error": str(e),
+                                })
+                                pbar.set_postfix(
+                                    created=result.records_created,
+                                    dup=result.duplicates_found,
+                                    err=len(result.errors),
+                                    refresh=False,
+                                )
+                                pbar.update(1)
+                                continue
+
+                        # Note: db.commit() is handled automatically by get_db_session() context manager
+                finally:
+                    pbar.close()
+
+            # Print summary after progress bar
+            print(
+                f"\nRelationships ingestion complete:\n"
+                f"  Processed: {result.records_processed}\n"
+                f"  Created:   {result.records_created}\n"
+                f"  Duplicates:{result.duplicates_found}\n"
+                f"  Errors:    {len(result.errors)}",
+                file=sys.stderr,
+            )
+
             result.status = "completed" if not result.errors else "partial"
             result.completed_at = datetime.utcnow()
-            
+
         except Exception as e:
             result.status = "failed"
             result.completed_at = datetime.utcnow()
             result.errors.append({"error": str(e), "fatal": True})
             self.logger.exception("Relationship ingestion failed")
-        
+
         return result
     
     async def _load_entity_id_map(self):

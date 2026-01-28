@@ -38,6 +38,9 @@ from .base import (
     with_retry,
     Neo4jHelper,
     PostgresHelper,
+    suppress_db_logging,
+    create_progress_bar,
+    download_with_progress,
 )
 from .cra import CRAIngester, run_cra_ingestion
 from .irs990 import IRS990Ingester, run_irs990_ingestion
@@ -46,6 +49,7 @@ from .canada_corps import CanadaCorporationsIngester, run_canada_corps_ingestion
 from .lobbying import LobbyingIngester, run_lobbying_ingestion
 from .elections_canada import ElectionsCanadaIngester, run_elections_canada_ingestion
 from .littlesis import LittleSisIngester, run_littlesis_ingestion, get_littlesis_stats
+from .meta_ads import MetaAdIngester, run_meta_ads_ingestion
 from .search import search_all_sources, warmup_search_cache, CompanySearchResult, CompanySearchResponse
 
 __all__ = [
@@ -57,6 +61,10 @@ __all__ = [
     "with_retry",
     "Neo4jHelper",
     "PostgresHelper",
+    # Progress utilities
+    "suppress_db_logging",
+    "create_progress_bar",
+    "download_with_progress",
     # Ingesters
     "IRS990Ingester",
     "run_irs990_ingestion",
@@ -73,6 +81,8 @@ __all__ = [
     "LittleSisIngester",
     "run_littlesis_ingestion",
     "get_littlesis_stats",
+    "MetaAdIngester",
+    "run_meta_ads_ingestion",
     "search_all_sources",
     "warmup_search_cache",
     "CompanySearchResult",

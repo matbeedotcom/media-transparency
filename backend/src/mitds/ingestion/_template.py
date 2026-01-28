@@ -32,9 +32,11 @@ Copy this file and modify it for your specific data source.
 - Use connection pooling (httpx.AsyncClient, not requests)
 
 ### Progress Tracking
-- The base class handles progress logging automatically
-- Don't implement your own record counting
+- The base class uses tqdm progress bars automatically during run()
+- Don't implement your own record counting - the base class tracks it
 - Use config.limit to respect record limits
+- Verbose database logging is suppressed during processing for clean output
+- For custom download stages, use `download_with_progress()` or `create_progress_bar()`
 
 ## Testing Your Ingester
 
@@ -64,6 +66,10 @@ from .base import (
     IngestionResult,
     Neo4jHelper,
     PostgresHelper,
+    # Progress utilities (for custom download stages)
+    create_progress_bar,
+    download_with_progress,
+    suppress_db_logging,
 )
 
 logger = get_context_logger(__name__)
