@@ -12,86 +12,21 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import Timeline, { TimelineEvent, BurstPeriod } from '../components/graph/Timeline';
 import {
   searchEntities,
+  analyzeTemporalCoordination,
+  calculateCompositeScore,
   detectFundingClusters,
   detectInfrastructureSharing,
+  explainFinding,
   type EntitySummary,
+  type TemporalAnalysisResponse,
+  type CompositeScoreResponse,
   type FundingClusterDetectionResponse,
   type InfrastructureSharingResponse,
+  type FindingExplanation,
 } from '../services/api';
 
-// API Types
-interface TemporalAnalysisRequest {
-  entity_ids: string[];
-  start_date: string;
-  end_date: string;
-  event_types?: string[];
-  exclude_hard_negatives: boolean;
-  async_mode: boolean;
-}
-
-interface TemporalAnalysisResponse {
-  analysis_id: string;
-  status: string;
-  analyzed_at: string;
-  time_range_start: string;
-  time_range_end: string;
-  entity_count: number;
-  event_count: number;
-  coordination_score: number;
-  confidence: number;
-  is_coordinated: boolean;
-  explanation: string;
-  bursts: BurstResult[];
-  lead_lag_pairs: LeadLagResult[];
-  synchronized_groups: SyncGroupResult[];
-  hard_negatives_filtered: number;
-}
-
-interface BurstResult {
-  entity_id: string;
-  bursts: BurstPeriod[];
-  total_events: number;
-  burst_count: number;
-  avg_events_per_day: number;
-}
-
-interface LeadLagResult {
-  leader_entity_id: string;
-  follower_entity_id: string;
-  lag_minutes: number;
-  correlation: number;
-  p_value: number;
-  sample_size: number;
-  is_significant: boolean;
-}
-
-interface SyncGroupResult {
-  entity_ids: string[];
-  sync_score: number;
-  js_divergence: number;
-  overlap_ratio: number;
-  time_window_hours: number;
-  confidence: number;
-}
-
-// Mock API call - replace with actual API client
-async function analyzeTemporalCoordination(request: TemporalAnalysisRequest): Promise<TemporalAnalysisResponse> {
-  const response = await fetch('/api/v1/detection/temporal-coordination', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(request),
-  });
-
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.detail || 'Analysis failed');
-  }
-
-  return response.json();
-}
-
 export default function DetectionResults() {
-  const [activeTab, setActiveTab] = useState<'temporal' | 'funding' | 'infrastructure'>('temporal');
+  const [activeTab, setActiveTab] = useState<'temporal' | 'funding' | 'infrastructure' | 'composite'>('temporal');
 
   // Temporal analysis form state
   const [selectedEntities, setSelectedEntities] = useState<EntitySummary[]>([]);
@@ -115,6 +50,16 @@ export default function DetectionResults() {
   const [infraDomains, setInfraDomains] = useState<string>('');
   const [infraMinScore, setInfraMinScore] = useState<number>(1.0);
   const [infraResult, setInfraResult] = useState<InfrastructureSharingResponse | null>(null);
+
+  // Composite scoring form state
+  const [compositeEntities, setCompositeEntities] = useState<EntitySummary[]>([]);
+  const [compositeSearchQuery, setCompositeSearchQuery] = useState('');
+  const [includeTemporal, setIncludeTemporal] = useState(true);
+  const [includeFunding, setIncludeFunding] = useState(true);
+  const [includeInfra, setIncludeInfra] = useState(true);
+  const [compositeResult, setCompositeResult] = useState<CompositeScoreResponse | null>(null);
+  const [explanation, setExplanation] = useState<FindingExplanation | null>(null);
+  const [showExplanation, setShowExplanation] = useState(false);
 
   // Entity search
   const { data: searchResults, isLoading: isSearching } = useQuery({
@@ -146,6 +91,57 @@ export default function DetectionResults() {
       setInfraResult(data);
     },
   });
+
+  // Composite scoring mutation
+  const compositeAnalysis = useMutation({
+    mutationFn: calculateCompositeScore,
+    onSuccess: (data) => {
+      setCompositeResult(data);
+      setShowExplanation(false);
+      setExplanation(null);
+    },
+  });
+
+  // Composite entity search
+  const { data: compositeSearchResults, isLoading: isCompositeSearching } = useQuery({
+    queryKey: ['composite-entity-search', compositeSearchQuery],
+    queryFn: () => searchEntities({ q: compositeSearchQuery, limit: 10 }),
+    enabled: compositeSearchQuery.length >= 2,
+  });
+
+  const handleRunComposite = useCallback(() => {
+    if (compositeEntities.length < 2) {
+      alert('Please select at least 2 entities');
+      return;
+    }
+    compositeAnalysis.mutate({
+      entity_ids: compositeEntities.map((e) => e.id),
+      include_temporal: includeTemporal,
+      include_funding: includeFunding,
+      include_infrastructure: includeInfra,
+    });
+  }, [compositeEntities, includeTemporal, includeFunding, includeInfra, compositeAnalysis]);
+
+  const handleAddCompositeEntity = (entity: EntitySummary) => {
+    if (!compositeEntities.find((e) => e.id === entity.id)) {
+      setCompositeEntities([...compositeEntities, entity]);
+    }
+    setCompositeSearchQuery('');
+  };
+
+  const handleRemoveCompositeEntity = (entityId: string) => {
+    setCompositeEntities(compositeEntities.filter((e) => e.id !== entityId));
+  };
+
+  const handleExplainFinding = useCallback(async (findingId: string) => {
+    try {
+      const result = await explainFinding(findingId);
+      setExplanation(result);
+      setShowExplanation(true);
+    } catch (err) {
+      console.error('Failed to load explanation:', err);
+    }
+  }, []);
 
   const handleRunFunding = useCallback(() => {
     fundingAnalysis.mutate({
@@ -206,7 +202,12 @@ export default function DetectionResults() {
   ) || [];
 
   const timelineBursts: BurstPeriod[] = analysisResult?.bursts.flatMap((burst) =>
-    burst.bursts
+    burst.bursts.map((b) => ({
+      startTime: b.startTime,
+      endTime: b.endTime,
+      level: b.intensity ?? b.eventCount,
+      eventCount: b.eventCount,
+    }))
   ) || [];
 
   // Calculate score color
@@ -243,6 +244,12 @@ export default function DetectionResults() {
           onClick={() => setActiveTab('infrastructure')}
         >
           Infrastructure Sharing
+        </button>
+        <button
+          className={`tab ${activeTab === 'composite' ? 'active' : ''}`}
+          onClick={() => setActiveTab('composite')}
+        >
+          Composite Score
         </button>
       </div>
 
@@ -794,6 +801,312 @@ export default function DetectionResults() {
         </div>
       )}
 
+      {/* Composite Score Tab */}
+      {activeTab === 'composite' && (
+        <div className="detection-panel">
+          <div className="card">
+            <h2>Composite Score Analysis</h2>
+            <p className="text-muted mb-md">
+              Calculate a multi-signal coordination score combining temporal,
+              funding, and infrastructure signals with correlation-aware weighting.
+            </p>
+
+            <form className="analysis-form" onSubmit={(e) => { e.preventDefault(); handleRunComposite(); }}>
+              <div className="form-group">
+                <label>Entities to Analyze</label>
+                <div className="entity-search-container">
+                  <input
+                    type="text"
+                    value={compositeSearchQuery}
+                    onChange={(e) => setCompositeSearchQuery(e.target.value)}
+                    placeholder="Search for entities to add..."
+                  />
+                  {isCompositeSearching && <span className="search-loading">Searching...</span>}
+                  {compositeSearchResults?.results && compositeSearchResults.results.length > 0 && compositeSearchQuery && (
+                    <div className="search-dropdown">
+                      {compositeSearchResults.results.map((entity) => (
+                        <button
+                          key={entity.id}
+                          type="button"
+                          className="search-result"
+                          onClick={() => handleAddCompositeEntity(entity)}
+                        >
+                          <span className="entity-type-badge">{entity.entity_type}</span>
+                          {entity.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="selected-entities">
+                  {compositeEntities.map((entity) => (
+                    <span key={entity.id} className="entity-chip">
+                      {entity.name}
+                      <button
+                        type="button"
+                        className="chip-remove"
+                        onClick={() => handleRemoveCompositeEntity(entity.id)}
+                      >
+                        x
+                      </button>
+                    </span>
+                  ))}
+                </div>
+                <small className="text-muted">
+                  Select at least 2 entities ({compositeEntities.length} selected)
+                </small>
+              </div>
+
+              <div className="form-group">
+                <label>Signals to Include</label>
+                <div className="checkbox-row">
+                  <label className="checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={includeTemporal}
+                      onChange={(e) => setIncludeTemporal(e.target.checked)}
+                    />
+                    Temporal coordination
+                  </label>
+                  <label className="checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={includeFunding}
+                      onChange={(e) => setIncludeFunding(e.target.checked)}
+                    />
+                    Funding clusters
+                  </label>
+                  <label className="checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={includeInfra}
+                      onChange={(e) => setIncludeInfra(e.target.checked)}
+                    />
+                    Infrastructure sharing
+                  </label>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={compositeEntities.length < 2 || compositeAnalysis.isPending}
+              >
+                {compositeAnalysis.isPending ? 'Calculating...' : 'Calculate Composite Score'}
+              </button>
+
+              {compositeAnalysis.isError && (
+                <div className="error-message">
+                  Error: {(compositeAnalysis.error as Error).message}
+                </div>
+              )}
+            </form>
+          </div>
+
+          {/* Composite Results */}
+          {compositeResult && (
+            <div className="card mt-md">
+              <h3>Composite Score Results</h3>
+
+              {/* Main scores */}
+              <div className="composite-scores">
+                <div className="composite-main-score">
+                  <div
+                    className="stat-value coordination-score"
+                    style={{ color: getScoreColor(compositeResult.overall_score) }}
+                  >
+                    {(compositeResult.overall_score * 100).toFixed(1)}%
+                  </div>
+                  <div className="stat-label">Overall Score</div>
+                </div>
+                <div className="composite-main-score">
+                  <div
+                    className="stat-value coordination-score"
+                    style={{ color: getScoreColor(compositeResult.adjusted_score) }}
+                  >
+                    {(compositeResult.adjusted_score * 100).toFixed(1)}%
+                  </div>
+                  <div className="stat-label">Adjusted Score</div>
+                </div>
+              </div>
+
+              {/* Flagged status */}
+              <div className={`coordination-indicator ${compositeResult.flagged ? 'coordinated' : 'not-coordinated'}`}>
+                {compositeResult.flagged ? (
+                  <>
+                    <span className="indicator-icon">!</span>
+                    <span>Flagged: {compositeResult.flag_reason}</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="indicator-icon">OK</span>
+                    <span>Not Flagged</span>
+                  </>
+                )}
+              </div>
+
+              {/* Signal breakdown bar */}
+              {compositeResult.signal_breakdown && (
+                <div className="results-section">
+                  <h4>Signal Breakdown</h4>
+                  <div className="signal-breakdown">
+                    {Object.entries(compositeResult.signal_breakdown).map(([signal, value]) => (
+                      <div key={signal} className="signal-bar-row">
+                        <span className="signal-label">{signal}</span>
+                        <div className="signal-bar-track">
+                          <div
+                            className="signal-bar-fill"
+                            style={{
+                              width: `${(value as number) * 100}%`,
+                              backgroundColor: getScoreColor(value as number),
+                            }}
+                          />
+                        </div>
+                        <span className="signal-value">{((value as number) * 100).toFixed(1)}%</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Category breakdown */}
+              {compositeResult.category_breakdown && (
+                <div className="results-section">
+                  <h4>Category Breakdown</h4>
+                  <table className="results-table">
+                    <thead>
+                      <tr>
+                        <th>Category</th>
+                        <th>Score</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(compositeResult.category_breakdown).map(([cat, score]) => (
+                        <tr key={cat}>
+                          <td>{cat}</td>
+                          <td>
+                            <span style={{ color: getScoreColor(score as number), fontWeight: 600 }}>
+                              {((score as number) * 100).toFixed(1)}%
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* Confidence band */}
+              {compositeResult.confidence_band && (
+                <div className="results-section">
+                  <h4>Confidence Band</h4>
+                  <div className="confidence-band">
+                    <div className="confidence-range">
+                      <span className="confidence-lower">
+                        {((compositeResult.confidence_band.lower ?? 0) * 100).toFixed(1)}%
+                      </span>
+                      <div className="confidence-bar-track">
+                        <div
+                          className="confidence-bar-range"
+                          style={{
+                            left: `${(compositeResult.confidence_band.lower ?? 0) * 100}%`,
+                            width: `${((compositeResult.confidence_band.upper ?? 1) - (compositeResult.confidence_band.lower ?? 0)) * 100}%`,
+                          }}
+                        />
+                        <div
+                          className="confidence-bar-marker"
+                          style={{ left: `${compositeResult.overall_score * 100}%` }}
+                        />
+                      </div>
+                      <span className="confidence-upper">
+                        {((compositeResult.confidence_band.upper ?? 1) * 100).toFixed(1)}%
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Validation messages */}
+              {compositeResult.validation_messages && compositeResult.validation_messages.length > 0 && (
+                <div className="results-section">
+                  <h4>Validation</h4>
+                  <div className={`validation-status ${compositeResult.validation_passed ? 'passed' : 'failed'}`}>
+                    {compositeResult.validation_passed ? 'Validation Passed' : 'Validation Issues'}
+                  </div>
+                  <ul className="validation-messages">
+                    {compositeResult.validation_messages.map((msg, i) => (
+                      <li key={i}>{msg}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Explain button */}
+              {compositeResult.finding_id && (
+                <div className="results-section">
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => handleExplainFinding(compositeResult.finding_id!)}
+                    disabled={showExplanation}
+                  >
+                    Explain Finding
+                  </button>
+                </div>
+              )}
+
+              {/* Explanation panel */}
+              {showExplanation && explanation && (
+                <div className="results-section explanation-panel">
+                  <h4>Finding Explanation</h4>
+                  <div className="explanation">{explanation.why_flagged}</div>
+
+                  {explanation.evidence_summary && explanation.evidence_summary.length > 0 && (
+                    <div style={{ marginTop: 'var(--spacing-md)' }}>
+                      <h5>Evidence Summary</h5>
+                      <ul className="evidence-list">
+                        {explanation.evidence_summary.map((item, i) => (
+                          <li key={i}>{typeof item === 'string' ? item : JSON.stringify(item)}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {explanation.hard_negatives_checked && explanation.hard_negatives_checked.length > 0 && (
+                    <p className="text-muted" style={{ marginTop: 'var(--spacing-sm)' }}>
+                      Hard negatives checked: {explanation.hard_negatives_checked.length}
+                    </p>
+                  )}
+
+                  {explanation.recommendations && explanation.recommendations.length > 0 && (
+                    <div style={{ marginTop: 'var(--spacing-md)' }}>
+                      <h5>Recommendations</h5>
+                      <ul className="evidence-list">
+                        {explanation.recommendations.map((rec, i) => (
+                          <li key={i}>{rec}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {!compositeResult && !compositeAnalysis.isPending && (
+            <div className="card mt-md">
+              <h3>Composite Score</h3>
+              <div className="empty-state">
+                <p>No results yet.</p>
+                <p className="text-muted">
+                  Select entities and signal types above to calculate a composite coordination score.
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       <style>{`
         .tabs {
           display: flex;
@@ -1105,6 +1418,172 @@ export default function DetectionResults() {
           transform: translateY(-50%);
           font-size: 12px;
           color: var(--text-muted);
+        }
+
+        .checkbox-row {
+          display: flex;
+          gap: var(--spacing-lg);
+          flex-wrap: wrap;
+        }
+
+        .composite-scores {
+          display: flex;
+          gap: var(--spacing-xl);
+          justify-content: center;
+          margin: var(--spacing-lg) 0;
+        }
+
+        .composite-main-score {
+          text-align: center;
+          padding: var(--spacing-lg);
+          background: var(--bg-tertiary);
+          border-radius: var(--border-radius);
+          min-width: 160px;
+        }
+
+        .signal-breakdown {
+          display: flex;
+          flex-direction: column;
+          gap: var(--spacing-sm);
+        }
+
+        .signal-bar-row {
+          display: flex;
+          align-items: center;
+          gap: var(--spacing-sm);
+        }
+
+        .signal-label {
+          width: 120px;
+          font-size: 0.875rem;
+          font-weight: 500;
+          text-transform: capitalize;
+        }
+
+        .signal-bar-track {
+          flex: 1;
+          height: 20px;
+          background: var(--bg-tertiary);
+          border-radius: 10px;
+          overflow: hidden;
+        }
+
+        .signal-bar-fill {
+          height: 100%;
+          border-radius: 10px;
+          transition: width 0.3s ease;
+        }
+
+        .signal-value {
+          width: 60px;
+          text-align: right;
+          font-size: 0.875rem;
+          font-weight: 600;
+        }
+
+        .confidence-band {
+          padding: var(--spacing-md) 0;
+        }
+
+        .confidence-range {
+          display: flex;
+          align-items: center;
+          gap: var(--spacing-sm);
+        }
+
+        .confidence-lower,
+        .confidence-upper {
+          font-size: 0.875rem;
+          font-weight: 600;
+          min-width: 50px;
+        }
+
+        .confidence-lower {
+          text-align: right;
+        }
+
+        .confidence-bar-track {
+          flex: 1;
+          height: 24px;
+          background: var(--bg-tertiary);
+          border-radius: 12px;
+          position: relative;
+          overflow: hidden;
+        }
+
+        .confidence-bar-range {
+          position: absolute;
+          top: 0;
+          height: 100%;
+          background: rgba(59, 130, 246, 0.3);
+          border-radius: 12px;
+        }
+
+        .confidence-bar-marker {
+          position: absolute;
+          top: 2px;
+          width: 4px;
+          height: 20px;
+          background: var(--color-primary);
+          border-radius: 2px;
+          transform: translateX(-50%);
+        }
+
+        .validation-status {
+          padding: var(--spacing-sm) var(--spacing-md);
+          border-radius: var(--border-radius);
+          font-weight: 600;
+          margin-bottom: var(--spacing-sm);
+        }
+
+        .validation-status.passed {
+          background: rgba(16, 185, 129, 0.1);
+          color: #10B981;
+        }
+
+        .validation-status.failed {
+          background: rgba(220, 38, 38, 0.1);
+          color: #DC2626;
+        }
+
+        .validation-messages {
+          list-style: none;
+          padding: 0;
+          margin: var(--spacing-sm) 0 0 0;
+        }
+
+        .validation-messages li {
+          padding: var(--spacing-xs) 0;
+          font-size: 0.875rem;
+          color: var(--text-secondary);
+          border-bottom: 1px solid var(--border-color);
+        }
+
+        .validation-messages li:last-child {
+          border-bottom: none;
+        }
+
+        .explanation-panel {
+          background: var(--bg-tertiary);
+          border-radius: var(--border-radius);
+          padding: var(--spacing-lg);
+        }
+
+        .explanation-panel h5 {
+          margin-bottom: var(--spacing-sm);
+          font-size: 0.875rem;
+        }
+
+        .evidence-list {
+          list-style: disc;
+          padding-left: var(--spacing-lg);
+          margin: 0;
+        }
+
+        .evidence-list li {
+          padding: var(--spacing-xs) 0;
+          font-size: 0.875rem;
+          color: var(--text-secondary);
         }
       `}</style>
     </div>

@@ -4,6 +4,7 @@
  * Displays evidence supporting an entity or relationship with source links.
  */
 
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import { getEntityEvidence, type Evidence } from '../../services/api';
@@ -106,9 +107,10 @@ export default function EvidencePanel({
     );
   }
 
+  const [showAll, setShowAll] = useState(false);
   const evidence = evidenceData?.evidence || [];
-  const displayEvidence = evidence.slice(0, maxItems);
-  const hasMore = evidence.length > maxItems;
+  const displayEvidence = showAll ? evidence : evidence.slice(0, maxItems);
+  const hasMore = !showAll && evidence.length > maxItems;
 
   if (evidence.length === 0) {
     return (
@@ -161,7 +163,7 @@ export default function EvidencePanel({
 
       {hasMore && (
         <div className="evidence-more">
-          <button className="btn btn-text">
+          <button className="btn btn-text" onClick={() => setShowAll(true)}>
             View all {evidence.length} sources
           </button>
         </div>

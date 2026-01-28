@@ -89,6 +89,7 @@ def upgrade() -> None:
         ),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("progress", sa.Integer, nullable=True),
         sa.Column("result", postgresql.JSONB, nullable=True),
         sa.Column("error", sa.Text, nullable=True),
         sa.Column("metadata", postgresql.JSONB, nullable=True),

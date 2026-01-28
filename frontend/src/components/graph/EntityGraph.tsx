@@ -7,7 +7,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import cytoscape, { Core, NodeSingular, EdgeSingular } from 'cytoscape';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { getEntityRelationships, getGraphAtTime, findAllPaths, type EntitySummary, type Relationship, type PathResult } from '../../services/api';
+import { getEntityRelationships, getGraphAtTime, findAllPaths, type Relationship, type PathResult } from '../../services/api';
 
 // Node color mapping by entity type
 const NODE_COLORS: Record<string, string> = {
@@ -65,11 +65,11 @@ export default function EntityGraph({
   enablePathFinding = false,
   onPathFound,
   asOf,
-  onTemporalDateChange,
+  onTemporalDateChange: _onTemporalDateChange,
 }: EntityGraphProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
-  const [selectedNode, setSelectedNode] = useState<string | null>(null);
+  const [_selectedNode, setSelectedNode] = useState<string | null>(null);
   const [pathFindingMode, setPathFindingMode] = useState(false);
   const [pathSource, setPathSource] = useState<string | null>(null);
   const [pathTarget, setPathTarget] = useState<string | null>(null);
@@ -114,7 +114,7 @@ export default function EntityGraph({
   const transformToGraphElements = useCallback(
     (
       relationships: Relationship[],
-      centerEntityId: string
+      _centerEntityId: string
     ): { nodes: GraphNode[]; edges: GraphEdge[] } => {
       const nodesMap = new Map<string, GraphNode>();
       const edges: GraphEdge[] = [];

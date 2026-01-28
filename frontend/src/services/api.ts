@@ -118,9 +118,9 @@ apiClient.interceptors.response.use(
   (response) => response,
   (error: AxiosError) => {
     if (error.response?.status === 401) {
-      // Handle unauthorized - redirect to login or clear token
+      // Handle unauthorized - clear token
+      // TODO: Add redirect to login page when auth is implemented
       localStorage.removeItem('auth_token');
-      window.location.href = '/login';
     }
     return Promise.reject(error);
   }
@@ -286,19 +286,91 @@ export const getFundingClusters = async (params?: {
 
 // Detection
 export const analyzeTemporalCoordination = async (data: {
-  outlet_ids: string[];
+  entity_ids: string[];
   start_date: string;
   end_date: string;
-  topic_filter?: string;
-}): Promise<unknown> => {
+  event_types?: string[];
+  exclude_hard_negatives?: boolean;
+  async_mode?: boolean;
+}): Promise<TemporalAnalysisResponse> => {
   const response = await apiClient.post('/detection/temporal-coordination', data);
   return response.data;
 };
 
+export interface TemporalBurstPeriod {
+  startTime: string;
+  endTime: string;
+  eventCount: number;
+  intensity: number;
+}
+
+export interface TemporalBurstResult {
+  entity_id: string;
+  bursts: TemporalBurstPeriod[];
+  total_events: number;
+  burst_count: number;
+  avg_events_per_day: number;
+}
+
+export interface LeadLagResult {
+  leader_entity_id: string;
+  follower_entity_id: string;
+  lag_minutes: number;
+  correlation: number;
+  p_value: number;
+  sample_size: number;
+  is_significant: boolean;
+}
+
+export interface SyncGroupResult {
+  entity_ids: string[];
+  sync_score: number;
+  js_divergence: number;
+  overlap_ratio: number;
+  time_window_hours: number;
+  confidence: number;
+}
+
+export interface TemporalAnalysisResponse {
+  analysis_id: string;
+  status: string;
+  analyzed_at: string;
+  time_range_start: string;
+  time_range_end: string;
+  entity_count: number;
+  event_count: number;
+  coordination_score: number;
+  confidence: number;
+  is_coordinated: boolean;
+  explanation: string;
+  bursts: TemporalBurstResult[];
+  lead_lag_pairs: LeadLagResult[];
+  synchronized_groups: SyncGroupResult[];
+  hard_negatives_filtered: number;
+}
+
+export interface CompositeScoreResponse {
+  finding_id: string;
+  overall_score: number;
+  adjusted_score: number;
+  signal_breakdown: Record<string, number>;
+  category_breakdown: Record<string, number>;
+  flagged: boolean;
+  flag_reason: string | null;
+  confidence_band: { lower: number; upper: number };
+  entities_analyzed: number;
+  explanation: string;
+  validation_passed: boolean;
+  validation_messages: string[];
+}
+
 export const calculateCompositeScore = async (data: {
-  outlet_ids: string[];
+  entity_ids: string[];
   weights?: Record<string, number>;
-}): Promise<unknown> => {
+  include_temporal?: boolean;
+  include_funding?: boolean;
+  include_infrastructure?: boolean;
+}): Promise<CompositeScoreResponse> => {
   const response = await apiClient.post('/detection/composite-score', data);
   return response.data;
 };
@@ -422,6 +494,266 @@ export const getJobStatus = async (jobId: string): Promise<JobStatus> => {
 // Health
 export const healthCheck = async (): Promise<{ status: string }> => {
   const response = await apiClient.get('/health');
+  return response.data;
+};
+
+// =========================
+// Resolution
+// =========================
+
+export interface ResolutionCandidate {
+  id: string;
+  status: string;
+  priority: string;
+  source_entity_id: string;
+  source_entity_name: string;
+  source_entity_type: string;
+  candidate_entity_id: string;
+  candidate_entity_name: string;
+  candidate_entity_type: string;
+  match_strategy: string;
+  match_confidence: number;
+  match_details: Record<string, unknown>;
+  created_at: string;
+  assigned_to: string | null;
+}
+
+export interface ResolutionStats {
+  total_pending: number;
+  total_in_progress: number;
+  total_completed: number;
+  total_approved: number;
+  total_rejected: number;
+  total_merged: number;
+  avg_confidence: number;
+  by_priority: Record<string, number>;
+  by_strategy: Record<string, number>;
+}
+
+export const getResolutionCandidates = async (params?: {
+  status?: string;
+  priority?: string;
+  strategy?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<PaginatedResponse<ResolutionCandidate>> => {
+  const response = await apiClient.get('/resolution/candidates', { params });
+  return response.data;
+};
+
+export const mergeCandidate = async (id: string): Promise<unknown> => {
+  const response = await apiClient.post(`/resolution/candidates/${id}/merge`);
+  return response.data;
+};
+
+export const rejectCandidate = async (id: string): Promise<unknown> => {
+  const response = await apiClient.post(`/resolution/candidates/${id}/reject`);
+  return response.data;
+};
+
+export const triggerResolution = async (params?: {
+  entity_type?: string;
+  dry_run?: boolean;
+}): Promise<{ status: string; entity_types: string[]; candidates_found: number; dry_run: boolean }> => {
+  const response = await apiClient.post('/resolution/trigger', null, { params });
+  return response.data;
+};
+
+export const getResolutionStats = async (): Promise<ResolutionStats> => {
+  const response = await apiClient.get('/resolution/stats');
+  return response.data;
+};
+
+// =========================
+// Jobs (expanded)
+// =========================
+
+export interface JobStatusFull {
+  job_id: string;
+  job_type: string;
+  status: string;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  progress: number | null;
+  metadata: Record<string, unknown>;
+  error: string | null;
+}
+
+export interface JobResult {
+  job_id: string;
+  job_type: string;
+  status: string;
+  created_at: string;
+  completed_at: string | null;
+  result: Record<string, unknown> | null;
+  error: string | null;
+}
+
+export const listJobs = async (params?: {
+  job_type?: string;
+  status?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<{ jobs: JobStatusFull[]; total: number; limit: number; offset: number }> => {
+  const response = await apiClient.get('/jobs/', { params });
+  return response.data;
+};
+
+export const getJobResult = async (jobId: string): Promise<JobResult> => {
+  const response = await apiClient.get(`/jobs/${jobId}/result`);
+  return response.data;
+};
+
+export const cancelJob = async (jobId: string): Promise<JobStatusFull> => {
+  const response = await apiClient.post(`/jobs/${jobId}/cancel`);
+  return response.data;
+};
+
+// =========================
+// Ingestion (expanded)
+// =========================
+
+export interface IngestionRun {
+  run_id: string;
+  source: string;
+  status: string;
+  started_at: string | null;
+  completed_at: string | null;
+  records_processed: number;
+  records_created: number;
+  records_updated: number;
+  duplicates_found: number;
+  errors: Array<Record<string, unknown>>;
+}
+
+export const getIngestionRuns = async (params?: {
+  source?: string;
+  status?: string;
+  limit?: number;
+}): Promise<{ runs: IngestionRun[]; total: number }> => {
+  const response = await apiClient.get('/ingestion/runs', { params });
+  return response.data;
+};
+
+export const getIngestionRun = async (id: string): Promise<IngestionRun> => {
+  const response = await apiClient.get(`/ingestion/runs/${id}`);
+  return response.data;
+};
+
+// =========================
+// Detection (expanded)
+// =========================
+
+export interface FindingExplanation {
+  finding_id: string;
+  finding_type: string;
+  entity_ids: string[];
+  score: number;
+  confidence: number;
+  why_flagged: string;
+  evidence_summary: Array<Record<string, unknown>>;
+  hard_negatives_checked: Array<Record<string, unknown>>;
+  recommendations: string[];
+}
+
+export const explainFinding = async (findingId: string): Promise<FindingExplanation> => {
+  const response = await apiClient.get(`/detection/explain/${findingId}`);
+  return response.data;
+};
+
+// =========================
+// Relationships (expanded)
+// =========================
+
+export const getConnectingEntities = async (params: {
+  entity_ids: string;
+  max_hops?: number;
+  rel_types?: string;
+}): Promise<{ connecting_entities: Array<{ entity: EntitySummary; connections: number }>; total: number }> => {
+  const response = await apiClient.get('/relationships/connecting-entities', { params });
+  return response.data;
+};
+
+export const getRelationshipTimeline = async (params: {
+  source_id: string;
+  target_id: string;
+  rel_type?: string;
+}): Promise<{ timeline: Array<{ rel_type: string; valid_from: string | null; valid_to: string | null; is_current: boolean; properties: Record<string, unknown> }>; source: EntitySummary; target: EntitySummary }> => {
+  const response = await apiClient.get('/relationships/timeline', { params });
+  return response.data;
+};
+
+export const getFundingPaths = async (
+  funderId: string,
+  params?: { max_hops?: number; min_amount?: number; fiscal_year?: number }
+): Promise<{ paths: Array<Record<string, unknown>>; total: number }> => {
+  const response = await apiClient.get(`/relationships/funding-paths/${funderId}`, { params });
+  return response.data;
+};
+
+export const getFundingRecipients = async (
+  funderId: string,
+  params?: { fiscal_year?: number; min_amount?: number; limit?: number }
+): Promise<{ recipients: Array<{ entity: EntitySummary; amount: number; fiscal_year: number }>; total: number }> => {
+  const response = await apiClient.get(`/relationships/funding-recipients/${funderId}`, { params });
+  return response.data;
+};
+
+export const getFundingSources = async (
+  recipientId: string,
+  params?: { fiscal_year?: number; min_amount?: number; limit?: number }
+): Promise<{ funders: Array<{ entity: EntitySummary; amount: number; fiscal_year: number }>; total: number }> => {
+  const response = await apiClient.get(`/relationships/funding-sources/${recipientId}`, { params });
+  return response.data;
+};
+
+export const getSharedFunders = async (params: {
+  entity_ids: string;
+  min_recipients?: number;
+  fiscal_year?: number;
+  limit?: number;
+}): Promise<{ shared_funders: Array<{ funder: EntitySummary; recipients: EntitySummary[]; shared_count: number; total_funding: number; funding_concentration: number }>; total: number }> => {
+  const response = await apiClient.get('/relationships/shared-funders', { params });
+  return response.data;
+};
+
+export const analyzeDomainInfrastructure = async (domain: string): Promise<Record<string, unknown>> => {
+  const response = await apiClient.post('/relationships/shared-infrastructure/analyze', null, {
+    params: { domain },
+  });
+  return response.data;
+};
+
+// =========================
+// Reports (expanded)
+// =========================
+
+export const getReportStatus = async (id: string): Promise<{ report_id: string; status: string; created_at: string; completed_at: string | null; error: string | null }> => {
+  const response = await apiClient.get(`/reports/${id}/status`);
+  return response.data;
+};
+
+// =========================
+// Validation
+// =========================
+
+export const getValidationDashboard = async (): Promise<Record<string, unknown>> => {
+  const response = await apiClient.get('/validation/dashboard');
+  return response.data;
+};
+
+export const getGoldenDatasets = async (): Promise<Array<Record<string, unknown>>> => {
+  const response = await apiClient.get('/validation/datasets');
+  return response.data;
+};
+
+export const runValidation = async (data: {
+  dataset_id: string;
+  threshold?: number;
+  include_synthetic?: boolean;
+}): Promise<AsyncJobResponse> => {
+  const response = await apiClient.post('/validation/run', data);
   return response.data;
 };
 

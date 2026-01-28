@@ -17,6 +17,7 @@ const navItems: NavItem[] = [
   { path: '/', label: 'Dashboard', icon: '📊' },
   { path: '/entities', label: 'Entity Explorer', icon: '🔍' },
   { path: '/detection', label: 'Detection', icon: '🎯' },
+  { path: '/resolution', label: 'Resolution', icon: '🔗' },
   { path: '/reports', label: 'Reports', icon: '📄' },
   { path: '/validation', label: 'Validation', icon: '✅' },
 ];

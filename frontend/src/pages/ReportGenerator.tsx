@@ -5,7 +5,14 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation } from '@tanstack/react-query';
+import {
+  searchEntities as apiSearchEntities,
+  getReportTemplates,
+  generateReport as apiGenerateReport,
+  getReport,
+  getReportStatus,
+} from '../services/api';
 
 // =========================
 // Types
@@ -83,54 +90,35 @@ interface ReportRequest {
 }
 
 // =========================
-// API Functions
+// API Wrappers
 // =========================
 
 async function fetchTemplates(): Promise<ReportTemplate[]> {
-  const response = await fetch('/api/v1/reports/templates');
-  if (!response.ok) {
-    throw new Error('Failed to fetch templates');
-  }
-  return response.json();
+  return getReportTemplates() as Promise<ReportTemplate[]>;
 }
 
-async function searchEntities(query: string): Promise<EntitySearchResult[]> {
+async function searchEntitiesLocal(query: string): Promise<EntitySearchResult[]> {
   if (!query || query.length < 2) return [];
-  const response = await fetch(`/api/v1/entities?query=${encodeURIComponent(query)}&limit=10`);
-  if (!response.ok) {
-    throw new Error('Failed to search entities');
-  }
-  const data = await response.json();
-  return data.entities || [];
+  const data = await apiSearchEntities({ q: query, limit: 10 });
+  return (data.results || []).map((e) => ({ id: e.id, name: e.name, entity_type: e.entity_type }));
 }
 
 async function generateReport(request: ReportRequest): Promise<{ report_id: string; status: string; status_url: string }> {
-  const response = await fetch('/api/v1/reports', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(request),
+  const result = await apiGenerateReport({
+    template_id: request.report_type,
+    entity_ids: request.entity_ids,
+    options: request.options,
   });
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.detail || 'Failed to generate report');
-  }
-  return response.json();
+  return { report_id: result.job_id, status: result.status, status_url: result.status_url || '' };
 }
 
 async function fetchReport(reportId: string, format: string = 'json'): Promise<ReportRecord> {
-  const response = await fetch(`/api/v1/reports/${reportId}?format=${format}`);
-  if (!response.ok) {
-    throw new Error('Failed to fetch report');
-  }
-  return response.json();
+  return getReport(reportId, format as 'json' | 'html' | 'pdf' | 'markdown') as Promise<ReportRecord>;
 }
 
 async function fetchReportStatus(reportId: string): Promise<{ id: string; status: string; error?: string }> {
-  const response = await fetch(`/api/v1/reports/${reportId}/status`);
-  if (!response.ok) {
-    throw new Error('Failed to fetch report status');
-  }
-  return response.json();
+  const result = await getReportStatus(reportId);
+  return { id: result.report_id, status: result.status, error: result.error || undefined };
 }
 
 // =========================
@@ -138,8 +126,6 @@ async function fetchReportStatus(reportId: string): Promise<{ id: string; status
 // =========================
 
 export default function ReportGenerator() {
-  const queryClient = useQueryClient();
-
   // Template selection
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
 
@@ -181,7 +167,7 @@ export default function ReportGenerator() {
 
     const timer = setTimeout(async () => {
       try {
-        const results = await searchEntities(entitySearch);
+        const results = await searchEntitiesLocal(entitySearch);
         // Filter out already selected entities
         const filtered = results.filter(
           (r) => !selectedEntities.some((e) => e.id === r.id)

@@ -12,14 +12,22 @@ import {
   getEntity,
   getEntityRelationships,
   getEntityBoardInterlocks,
+  getRelationshipChanges,
+  getRelationshipTimeline,
+  getFundingPaths,
+  getFundingRecipients,
+  getFundingSources,
+  getConnectingEntities,
+  getSharedFunders,
   type Entity,
   type Relationship,
   type BoardInterlock,
+  type EntitySummary,
 } from '../services/api';
 import { EntityGraph, InfrastructureOverlap } from '../components/graph';
 import { EvidencePanel } from '../components/evidence';
 
-type ViewMode = 'detail' | 'graph' | 'evidence' | 'infrastructure' | 'interlocks';
+type ViewMode = 'detail' | 'graph' | 'evidence' | 'infrastructure' | 'interlocks' | 'funding' | 'changes';
 
 export default function EntityExplorer() {
   const { id } = useParams();
@@ -46,15 +54,44 @@ export default function EntityExplorer() {
     return new Date().toISOString().split('T')[0];
   });
 
+  // Pagination state
+  const [offset, setOffset] = useState(0);
+  const pageSize = 20;
+
+  // Funding tab state
+  const [fundingFiscalYear, setFundingFiscalYear] = useState<number | undefined>(undefined);
+
+  // Relationship changes tab state
+  const [changesFromDate, setChangesFromDate] = useState(() => {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() - 1);
+    return d.toISOString().split('T')[0];
+  });
+  const [changesToDate, setChangesToDate] = useState(() => new Date().toISOString().split('T')[0]);
+
+  // Relationship timeline state
+  const [timelineRelationship, setTimelineRelationship] = useState<Relationship | null>(null);
+
+  // Connecting entities state
+  const [connectorEntityIds, setConnectorEntityIds] = useState<EntitySummary[]>([]);
+  const [connectorSearchQuery, setConnectorSearchQuery] = useState('');
+  const [connectorMaxHops, setConnectorMaxHops] = useState(2);
+  const [showConnectorPanel, setShowConnectorPanel] = useState(false);
+
+  // Shared funders state (used in funding tab when multiple entities selected)
+  const [sharedFunderIds, setSharedFunderIds] = useState<EntitySummary[]>([]);
+  const [sharedFunderSearch, setSharedFunderSearch] = useState('');
+  const [showSharedFunders, setShowSharedFunders] = useState(false);
+
   // Search entities
   const { data: searchResults, isLoading: searchLoading } = useQuery({
-    queryKey: ['entities', searchParams.get('q'), searchParams.get('type')],
+    queryKey: ['entities', searchParams.get('q'), searchParams.get('type'), offset],
     queryFn: () =>
       searchEntities({
         q: searchParams.get('q') || undefined,
         type: searchParams.get('type') || undefined,
-        limit: 20,
-        offset: 0,
+        limit: pageSize,
+        offset,
       }),
     enabled: !!searchParams.get('q'),
   });
@@ -80,8 +117,81 @@ export default function EntityExplorer() {
     enabled: !!id && viewMode === 'interlocks',
   });
 
+  // Funding sources
+  const { data: fundingSources, isLoading: fundingSourcesLoading } = useQuery({
+    queryKey: ['funding-sources', id, fundingFiscalYear],
+    queryFn: () => getFundingSources(id!, { fiscal_year: fundingFiscalYear, limit: 50 }),
+    enabled: !!id && viewMode === 'funding',
+  });
+
+  // Funding recipients
+  const { data: fundingRecipients, isLoading: fundingRecipientsLoading } = useQuery({
+    queryKey: ['funding-recipients', id, fundingFiscalYear],
+    queryFn: () => getFundingRecipients(id!, { fiscal_year: fundingFiscalYear, limit: 50 }),
+    enabled: !!id && viewMode === 'funding',
+  });
+
+  // Funding paths
+  const { data: fundingPaths, isLoading: fundingPathsLoading } = useQuery({
+    queryKey: ['funding-paths', id],
+    queryFn: () => getFundingPaths(id!, { max_hops: 3 }),
+    enabled: !!id && viewMode === 'funding',
+  });
+
+  // Relationship changes
+  const { data: relationshipChanges, isLoading: changesLoading } = useQuery({
+    queryKey: ['relationship-changes', id, changesFromDate, changesToDate],
+    queryFn: () => getRelationshipChanges(id!, changesFromDate, changesToDate),
+    enabled: !!id && viewMode === 'changes',
+  });
+
+  // Relationship timeline (for a specific relationship)
+  const { data: relTimeline } = useQuery({
+    queryKey: ['relationship-timeline', timelineRelationship?.source_entity.id, timelineRelationship?.target_entity.id, timelineRelationship?.rel_type],
+    queryFn: () => getRelationshipTimeline({
+      source_id: timelineRelationship!.source_entity.id,
+      target_id: timelineRelationship!.target_entity.id,
+      rel_type: timelineRelationship!.rel_type,
+    }),
+    enabled: !!timelineRelationship,
+  });
+
+  // Connecting entities search
+  const { data: connectorSearchResults, isLoading: isConnectorSearching } = useQuery({
+    queryKey: ['connector-search', connectorSearchQuery],
+    queryFn: () => searchEntities({ q: connectorSearchQuery, limit: 10 }),
+    enabled: connectorSearchQuery.length >= 2,
+  });
+
+  // Connecting entities query
+  const { data: connectingData, isLoading: connectingLoading } = useQuery({
+    queryKey: ['connecting-entities', connectorEntityIds.map((e) => e.id).join(','), connectorMaxHops],
+    queryFn: () => getConnectingEntities({
+      entity_ids: connectorEntityIds.map((e) => e.id).join(','),
+      max_hops: connectorMaxHops,
+    }),
+    enabled: showConnectorPanel && connectorEntityIds.length >= 2,
+  });
+
+  // Shared funders entity search
+  const { data: sharedFunderSearchResults, isLoading: isSharedFunderSearching } = useQuery({
+    queryKey: ['shared-funder-search', sharedFunderSearch],
+    queryFn: () => searchEntities({ q: sharedFunderSearch, limit: 10 }),
+    enabled: sharedFunderSearch.length >= 2,
+  });
+
+  // Shared funders query
+  const { data: sharedFundersData, isLoading: sharedFundersLoading } = useQuery({
+    queryKey: ['shared-funders', sharedFunderIds.map((e) => e.id).join(',')],
+    queryFn: () => getSharedFunders({
+      entity_ids: sharedFunderIds.map((e) => e.id).join(','),
+    }),
+    enabled: showSharedFunders && sharedFunderIds.length >= 2,
+  });
+
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
+    setOffset(0);
     setSearchParams({ q: searchQuery });
   };
 
@@ -208,6 +318,31 @@ export default function EntityExplorer() {
                 <p>Enter a search query to find entities.</p>
               </div>
             )}
+
+            {/* Pagination */}
+            {searchResults && searchResults.total > pageSize && (
+              <div className="pagination-controls">
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={offset === 0}
+                  onClick={() => setOffset(Math.max(0, offset - pageSize))}
+                >
+                  Previous
+                </button>
+                <span className="pagination-info">
+                  {offset + 1}–{Math.min(offset + pageSize, searchResults.total)} of {searchResults.total}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={offset + pageSize >= searchResults.total}
+                  onClick={() => setOffset(offset + pageSize)}
+                >
+                  Next
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
@@ -243,6 +378,20 @@ export default function EntityExplorer() {
                 onClick={() => setViewMode('infrastructure')}
               >
                 Infrastructure
+              </button>
+              <button
+                type="button"
+                className={`tab ${viewMode === 'funding' ? 'active' : ''}`}
+                onClick={() => setViewMode('funding')}
+              >
+                Funding
+              </button>
+              <button
+                type="button"
+                className={`tab ${viewMode === 'changes' ? 'active' : ''}`}
+                onClick={() => setViewMode('changes')}
+              >
+                Changes
               </button>
               {selectedEntity?.entity_type === 'ORGANIZATION' && (
                 <button
@@ -341,9 +490,52 @@ export default function EntityExplorer() {
                               ? rel.target_entity.name
                               : rel.source_entity.name}
                           </a>
+                          <button
+                            type="button"
+                            className="btn-timeline"
+                            onClick={() => setTimelineRelationship(
+                              timelineRelationship?.id === rel.id ? null : rel
+                            )}
+                            title="View relationship history"
+                          >
+                            {timelineRelationship?.id === rel.id ? 'Hide' : 'Timeline'}
+                          </button>
                         </li>
                       ))}
                     </ul>
+
+                    {/* Relationship Timeline */}
+                    {timelineRelationship && relTimeline && (
+                      <div className="rel-timeline-panel">
+                        <h5>
+                          Timeline: {timelineRelationship.rel_type} —{' '}
+                          {timelineRelationship.source_entity.name} → {timelineRelationship.target_entity.name}
+                        </h5>
+                        {relTimeline.timeline.length > 0 ? (
+                          <ul className="timeline-periods">
+                            {relTimeline.timeline.map((period, i) => (
+                              <li key={i} className="timeline-period">
+                                <span className="period-range">
+                                  {period.valid_from || '?'} — {period.valid_to || 'present'}
+                                </span>
+                                {period.is_current && (
+                                  <span className="badge-current">Current</span>
+                                )}
+                                {period.properties && Object.keys(period.properties).length > 0 && (
+                                  <span className="text-muted period-details">
+                                    {Object.entries(period.properties)
+                                      .map(([k, v]) => `${k}: ${String(v)}`)
+                                      .join(', ')}
+                                  </span>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="text-muted">No historical periods found.</p>
+                        )}
+                      </div>
+                    )}
                     {relationships.total > 5 && (
                       <button
                         type="button"
@@ -408,8 +600,100 @@ export default function EntityExplorer() {
                   onNodeClick={handleNodeClick}
                   onEdgeClick={handleEdgeClick}
                   height="500px"
+                  enablePathFinding={true}
                   asOf={temporalEnabled ? temporalDate : undefined}
                 />
+
+                {/* Find Connectors Panel */}
+                <div className="connector-section">
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => setShowConnectorPanel(!showConnectorPanel)}
+                  >
+                    {showConnectorPanel ? 'Hide Connectors' : 'Find Connectors'}
+                  </button>
+                  {showConnectorPanel && (
+                    <div className="connector-panel">
+                      <p className="text-muted connector-desc">
+                        Find entities that connect multiple targets in the graph.
+                      </p>
+                      <div className="connector-search">
+                        <input
+                          type="text"
+                          value={connectorSearchQuery}
+                          onChange={(e) => setConnectorSearchQuery(e.target.value)}
+                          placeholder="Search entities to add..."
+                        />
+                        {isConnectorSearching && <span className="text-muted">Searching...</span>}
+                        {connectorSearchResults?.results && connectorSearchQuery && (
+                          <div className="connector-dropdown">
+                            {connectorSearchResults.results.map((entity) => (
+                              <button
+                                key={entity.id}
+                                type="button"
+                                className="connector-result"
+                                onClick={() => {
+                                  if (!connectorEntityIds.find((e) => e.id === entity.id)) {
+                                    setConnectorEntityIds([...connectorEntityIds, entity]);
+                                  }
+                                  setConnectorSearchQuery('');
+                                }}
+                              >
+                                <span className="entity-type-badge">{entity.entity_type}</span>
+                                {entity.name}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <div className="connector-chips">
+                        {connectorEntityIds.map((e) => (
+                          <span key={e.id} className="connector-chip">
+                            {e.name}
+                            <button type="button" onClick={() => setConnectorEntityIds(connectorEntityIds.filter((x) => x.id !== e.id))}>x</button>
+                          </span>
+                        ))}
+                      </div>
+                      <div className="connector-controls">
+                        <label>
+                          Max hops:
+                          <input
+                            type="range"
+                            min={1}
+                            max={5}
+                            value={connectorMaxHops}
+                            onChange={(e) => setConnectorMaxHops(Number(e.target.value))}
+                          />
+                          <span>{connectorMaxHops}</span>
+                        </label>
+                      </div>
+                      {connectingLoading && <div className="loading"><div className="spinner" /><span>Finding connectors...</span></div>}
+                      {connectingData?.connecting_entities && connectingData.connecting_entities.length > 0 && (
+                        <div className="connector-results">
+                          <h5>Connecting Entities ({connectingData.total})</h5>
+                          <ul className="connector-list">
+                            {connectingData.connecting_entities.map((ce) => (
+                              <li key={ce.entity.id} className="connector-item">
+                                <a
+                                  href={`/entities/${ce.entity.id}`}
+                                  onClick={(e) => { e.preventDefault(); handleEntitySelect(ce.entity.id); }}
+                                >
+                                  {ce.entity.name}
+                                </a>
+                                <span className="connector-count">{ce.connections} connections</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {connectingData && connectingData.connecting_entities.length === 0 && (
+                        <p className="text-muted">No connecting entities found.</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+
                 {selectedRelationship && (
                   <div className="relationship-detail card">
                     <h4>Selected Relationship</h4>
@@ -468,6 +752,296 @@ export default function EntityExplorer() {
                   }
                   height="500px"
                 />
+              </div>
+            ) : viewMode === 'funding' && id ? (
+              <div className="funding-view">
+                <div className="funding-filter">
+                  <label>
+                    Fiscal Year:
+                    <input
+                      type="number"
+                      min="2000"
+                      max="2030"
+                      value={fundingFiscalYear ?? ''}
+                      onChange={(e) => setFundingFiscalYear(e.target.value ? parseInt(e.target.value) : undefined)}
+                      placeholder="All years"
+                    />
+                  </label>
+                </div>
+
+                {/* Funding Sources */}
+                <div className="funding-section">
+                  <h4>Funding Sources</h4>
+                  {fundingSourcesLoading ? (
+                    <div className="loading"><div className="spinner" /><span>Loading...</span></div>
+                  ) : fundingSources?.funders && fundingSources.funders.length > 0 ? (
+                    <table className="funding-table">
+                      <thead>
+                        <tr><th>Funder</th><th>Amount</th><th>Year</th></tr>
+                      </thead>
+                      <tbody>
+                        {fundingSources.funders.map((f, i) => (
+                          <tr key={i}>
+                            <td>
+                              <a
+                                href={`/entities/${f.entity.id}`}
+                                onClick={(e) => { e.preventDefault(); handleEntitySelect(f.entity.id); }}
+                              >
+                                {f.entity.name}
+                              </a>
+                            </td>
+                            <td>${f.amount.toLocaleString()}</td>
+                            <td>{f.fiscal_year}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <p className="text-muted">No funding sources found.</p>
+                  )}
+                </div>
+
+                {/* Funding Recipients */}
+                <div className="funding-section">
+                  <h4>Funding Recipients</h4>
+                  {fundingRecipientsLoading ? (
+                    <div className="loading"><div className="spinner" /><span>Loading...</span></div>
+                  ) : fundingRecipients?.recipients && fundingRecipients.recipients.length > 0 ? (
+                    <table className="funding-table">
+                      <thead>
+                        <tr><th>Recipient</th><th>Amount</th><th>Year</th></tr>
+                      </thead>
+                      <tbody>
+                        {fundingRecipients.recipients.map((r, i) => (
+                          <tr key={i}>
+                            <td>
+                              <a
+                                href={`/entities/${r.entity.id}`}
+                                onClick={(e) => { e.preventDefault(); handleEntitySelect(r.entity.id); }}
+                              >
+                                {r.entity.name}
+                              </a>
+                            </td>
+                            <td>${r.amount.toLocaleString()}</td>
+                            <td>{r.fiscal_year}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <p className="text-muted">No funding recipients found.</p>
+                  )}
+                </div>
+
+                {/* Funding Paths */}
+                <div className="funding-section">
+                  <h4>Multi-Hop Funding Paths</h4>
+                  {fundingPathsLoading ? (
+                    <div className="loading"><div className="spinner" /><span>Loading...</span></div>
+                  ) : fundingPaths?.paths && fundingPaths.paths.length > 0 ? (
+                    <ul className="funding-paths-list">
+                      {fundingPaths.paths.map((path, i) => (
+                        <li key={i} className="funding-path-item">
+                          {Array.isArray(path.entities) ? (
+                            <div className="path-chain">
+                              {(path.entities as Array<{ id: string; name: string }>).map((entity, j) => (
+                                <span key={j}>
+                                  {j > 0 && <span className="path-arrow">→</span>}
+                                  <a
+                                    href={`/entities/${entity.id}`}
+                                    onClick={(e) => { e.preventDefault(); handleEntitySelect(entity.id); }}
+                                  >
+                                    {entity.name}
+                                  </a>
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-muted">Path {i + 1}</span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-muted">No multi-hop funding paths found.</p>
+                  )}
+                </div>
+
+                {/* Shared Funders */}
+                <div className="funding-section">
+                  <h4>Shared Funders Analysis</h4>
+                  <p className="text-muted">Find funders shared between multiple entities.</p>
+                  <div className="connector-search">
+                    <input
+                      type="text"
+                      value={sharedFunderSearch}
+                      onChange={(e) => setSharedFunderSearch(e.target.value)}
+                      placeholder="Search entities to compare..."
+                    />
+                    {isSharedFunderSearching && <span className="text-muted">Searching...</span>}
+                    {sharedFunderSearchResults?.results && sharedFunderSearch && (
+                      <div className="connector-dropdown">
+                        {sharedFunderSearchResults.results.map((entity) => (
+                          <button
+                            key={entity.id}
+                            type="button"
+                            className="connector-result"
+                            onClick={() => {
+                              if (!sharedFunderIds.find((e) => e.id === entity.id)) {
+                                setSharedFunderIds([...sharedFunderIds, entity]);
+                              }
+                              setSharedFunderSearch('');
+                            }}
+                          >
+                            <span className="entity-type-badge">{entity.entity_type}</span>
+                            {entity.name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="connector-chips">
+                    {sharedFunderIds.map((e) => (
+                      <span key={e.id} className="connector-chip">
+                        {e.name}
+                        <button type="button" onClick={() => setSharedFunderIds(sharedFunderIds.filter((x) => x.id !== e.id))}>x</button>
+                      </span>
+                    ))}
+                  </div>
+                  {sharedFunderIds.length >= 2 && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => setShowSharedFunders(true)}
+                      disabled={sharedFundersLoading}
+                    >
+                      {sharedFundersLoading ? 'Searching...' : 'Find Shared Funders'}
+                    </button>
+                  )}
+                  {sharedFundersData?.shared_funders && sharedFundersData.shared_funders.length > 0 && (
+                    <table className="funding-table" style={{ marginTop: 'var(--spacing-md)' }}>
+                      <thead>
+                        <tr>
+                          <th>Funder</th>
+                          <th>Shared Recipients</th>
+                          <th>Total Funding</th>
+                          <th>Concentration</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sharedFundersData.shared_funders.map((sf, i) => (
+                          <tr key={i}>
+                            <td>
+                              <a
+                                href={`/entities/${sf.funder.id}`}
+                                onClick={(e) => { e.preventDefault(); handleEntitySelect(sf.funder.id); }}
+                              >
+                                {sf.funder.name}
+                              </a>
+                            </td>
+                            <td>{sf.shared_count}</td>
+                            <td>${sf.total_funding.toLocaleString()}</td>
+                            <td>{(sf.funding_concentration * 100).toFixed(1)}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                  {showSharedFunders && sharedFundersData && sharedFundersData.shared_funders.length === 0 && (
+                    <p className="text-muted">No shared funders found.</p>
+                  )}
+                </div>
+              </div>
+            ) : viewMode === 'changes' && id ? (
+              <div className="changes-view">
+                <div className="changes-filter">
+                  <label>
+                    From:
+                    <input type="date" value={changesFromDate} onChange={(e) => setChangesFromDate(e.target.value)} />
+                  </label>
+                  <label>
+                    To:
+                    <input type="date" value={changesToDate} onChange={(e) => setChangesToDate(e.target.value)} />
+                  </label>
+                </div>
+
+                {changesLoading ? (
+                  <div className="loading"><div className="spinner" /><span>Loading changes...</span></div>
+                ) : relationshipChanges ? (
+                  <div className="changes-content">
+                    {/* Added */}
+                    {relationshipChanges.added_relationships.length > 0 && (
+                      <div className="changes-section">
+                        <h4 className="changes-added">Added ({relationshipChanges.added_relationships.length})</h4>
+                        <ul className="changes-list">
+                          {(relationshipChanges.added_relationships as Array<Record<string, unknown>>).map((rel, i) => (
+                            <li key={i} className="change-item added">
+                              <span className="rel-type-badge">{String(rel.rel_type || 'UNKNOWN')}</span>
+                              <span>
+                                {String(rel.target_name || rel.target_entity_id || 'Unknown')}
+                              </span>
+                              {rel.valid_from ? (
+                                <span className="text-muted">from {String(rel.valid_from)}</span>
+                              ) : null}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* Removed */}
+                    {relationshipChanges.removed_relationships.length > 0 && (
+                      <div className="changes-section">
+                        <h4 className="changes-removed">Removed ({relationshipChanges.removed_relationships.length})</h4>
+                        <ul className="changes-list">
+                          {(relationshipChanges.removed_relationships as Array<Record<string, unknown>>).map((rel, i) => (
+                            <li key={i} className="change-item removed">
+                              <span className="rel-type-badge">{String(rel.rel_type || 'UNKNOWN')}</span>
+                              <span>
+                                {String(rel.target_name || rel.target_entity_id || 'Unknown')}
+                              </span>
+                              {rel.valid_until ? (
+                                <span className="text-muted">until {String(rel.valid_until)}</span>
+                              ) : null}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* Modified */}
+                    {relationshipChanges.modified_relationships &&
+                      (relationshipChanges.modified_relationships as unknown[]).length > 0 && (
+                      <div className="changes-section">
+                        <h4 className="changes-modified">
+                          Modified ({(relationshipChanges.modified_relationships as unknown[]).length})
+                        </h4>
+                        <ul className="changes-list">
+                          {(relationshipChanges.modified_relationships as Array<Record<string, unknown>>).map(
+                            (rel, i) => (
+                              <li key={i} className="change-item modified">
+                                <span className="rel-type-badge">{String(rel.rel_type || 'UNKNOWN')}</span>
+                                <span>{String(rel.target_name || rel.target_entity_id || 'Unknown')}</span>
+                              </li>
+                            )
+                          )}
+                        </ul>
+                      </div>
+                    )}
+
+                    {relationshipChanges.added_relationships.length === 0 &&
+                      relationshipChanges.removed_relationships.length === 0 &&
+                      !(relationshipChanges.modified_relationships as unknown[] | undefined)?.length && (
+                      <div className="empty-state">
+                        <p>No relationship changes in this period.</p>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="empty-state">
+                    <p>Select a date range to view relationship changes.</p>
+                  </div>
+                )}
               </div>
             ) : viewMode === 'interlocks' && id ? (
               <div className="interlocks-view">
@@ -960,6 +1534,384 @@ export default function EntityExplorer() {
           display: flex;
           align-items: center;
           justify-content: center;
+        }
+
+        .pagination-controls {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: var(--spacing-sm);
+          padding: var(--spacing-sm);
+          border-top: 1px solid var(--border-color);
+        }
+
+        .pagination-info {
+          font-size: 0.75rem;
+          color: var(--text-muted);
+        }
+
+        .btn-sm {
+          padding: 4px 8px;
+          font-size: 0.75rem;
+        }
+
+        .btn-timeline {
+          background: none;
+          border: 1px solid var(--border-color);
+          border-radius: 4px;
+          color: var(--text-muted);
+          cursor: pointer;
+          font-size: 0.625rem;
+          padding: 2px 6px;
+          margin-left: auto;
+        }
+
+        .btn-timeline:hover {
+          background: var(--bg-tertiary);
+          color: var(--text-primary);
+        }
+
+        .rel-timeline-panel {
+          margin-top: var(--spacing-md);
+          padding: var(--spacing-md);
+          background: var(--bg-tertiary);
+          border-radius: var(--border-radius);
+        }
+
+        .rel-timeline-panel h5 {
+          margin-bottom: var(--spacing-sm);
+          font-size: 0.875rem;
+        }
+
+        .timeline-periods {
+          list-style: none;
+          margin: 0;
+          padding: 0;
+        }
+
+        .timeline-period {
+          display: flex;
+          align-items: center;
+          gap: var(--spacing-sm);
+          padding: var(--spacing-xs) 0;
+          border-bottom: 1px solid var(--border-color);
+          font-size: 0.875rem;
+        }
+
+        .timeline-period:last-child {
+          border-bottom: none;
+        }
+
+        .period-range {
+          font-weight: 500;
+          min-width: 200px;
+        }
+
+        .badge-current {
+          font-size: 0.625rem;
+          padding: 2px 6px;
+          border-radius: 4px;
+          background: #10B981;
+          color: white;
+        }
+
+        .period-details {
+          font-size: 0.75rem;
+        }
+
+        .funding-view,
+        .changes-view {
+          padding: var(--spacing-sm);
+        }
+
+        .funding-filter,
+        .changes-filter {
+          display: flex;
+          gap: var(--spacing-md);
+          align-items: flex-end;
+          margin-bottom: var(--spacing-lg);
+          flex-wrap: wrap;
+        }
+
+        .funding-filter label,
+        .changes-filter label {
+          display: flex;
+          flex-direction: column;
+          gap: var(--spacing-xs);
+          font-size: 0.875rem;
+          font-weight: 500;
+        }
+
+        .funding-filter input,
+        .changes-filter input {
+          padding: var(--spacing-xs) var(--spacing-sm);
+          border: 1px solid var(--border-color);
+          border-radius: var(--border-radius);
+          font-size: 0.875rem;
+          width: 140px;
+        }
+
+        .funding-section {
+          margin-bottom: var(--spacing-lg);
+          padding-bottom: var(--spacing-lg);
+          border-bottom: 1px solid var(--border-color);
+        }
+
+        .funding-section:last-child {
+          border-bottom: none;
+        }
+
+        .funding-section h4 {
+          margin-bottom: var(--spacing-sm);
+        }
+
+        .funding-table {
+          width: 100%;
+          border-collapse: collapse;
+          font-size: 0.875rem;
+        }
+
+        .funding-table th,
+        .funding-table td {
+          padding: var(--spacing-sm);
+          text-align: left;
+          border-bottom: 1px solid var(--border-color);
+        }
+
+        .funding-table th {
+          background: var(--bg-tertiary);
+          font-weight: 600;
+        }
+
+        .funding-table a {
+          color: var(--color-primary);
+          text-decoration: none;
+        }
+
+        .funding-table a:hover {
+          text-decoration: underline;
+        }
+
+        .funding-paths-list {
+          list-style: none;
+          margin: 0;
+          padding: 0;
+        }
+
+        .funding-path-item {
+          padding: var(--spacing-sm);
+          border-bottom: 1px solid var(--border-color);
+        }
+
+        .funding-path-item:last-child {
+          border-bottom: none;
+        }
+
+        .path-chain {
+          display: flex;
+          align-items: center;
+          flex-wrap: wrap;
+          gap: var(--spacing-xs);
+        }
+
+        .path-chain a {
+          color: var(--color-primary);
+          text-decoration: none;
+        }
+
+        .path-chain a:hover {
+          text-decoration: underline;
+        }
+
+        .path-arrow {
+          color: var(--text-muted);
+          font-weight: 600;
+        }
+
+        .changes-content {
+          display: flex;
+          flex-direction: column;
+          gap: var(--spacing-md);
+        }
+
+        .changes-section h4 {
+          margin-bottom: var(--spacing-sm);
+          font-weight: 600;
+        }
+
+        .changes-added { color: #10B981; }
+        .changes-removed { color: #DC2626; }
+        .changes-modified { color: #F59E0B; }
+
+        .changes-list {
+          list-style: none;
+          margin: 0;
+          padding: 0;
+        }
+
+        .change-item {
+          display: flex;
+          align-items: center;
+          gap: var(--spacing-sm);
+          padding: var(--spacing-xs) var(--spacing-sm);
+          border-left: 3px solid transparent;
+          font-size: 0.875rem;
+        }
+
+        .change-item.added { border-left-color: #10B981; }
+        .change-item.removed { border-left-color: #DC2626; }
+        .change-item.modified { border-left-color: #F59E0B; }
+
+        .connector-section {
+          margin-top: var(--spacing-md);
+        }
+
+        .connector-panel {
+          margin-top: var(--spacing-sm);
+          padding: var(--spacing-md);
+          background: var(--bg-tertiary);
+          border-radius: var(--border-radius);
+        }
+
+        .connector-desc {
+          margin-bottom: var(--spacing-sm);
+          font-size: 0.875rem;
+        }
+
+        .connector-search {
+          position: relative;
+          margin-bottom: var(--spacing-sm);
+        }
+
+        .connector-search input {
+          width: 100%;
+          padding: var(--spacing-xs) var(--spacing-sm);
+          border: 1px solid var(--border-color);
+          border-radius: var(--border-radius);
+          font-size: 0.875rem;
+        }
+
+        .connector-dropdown {
+          position: absolute;
+          top: 100%;
+          left: 0;
+          right: 0;
+          background: var(--bg-primary);
+          border: 1px solid var(--border-color);
+          border-radius: var(--border-radius);
+          box-shadow: var(--shadow-md);
+          z-index: 100;
+          max-height: 180px;
+          overflow-y: auto;
+        }
+
+        .connector-result {
+          display: flex;
+          align-items: center;
+          gap: var(--spacing-sm);
+          width: 100%;
+          padding: var(--spacing-sm);
+          border: none;
+          background: none;
+          text-align: left;
+          cursor: pointer;
+          font-size: 0.875rem;
+        }
+
+        .connector-result:hover {
+          background: var(--bg-tertiary);
+        }
+
+        .connector-chips {
+          display: flex;
+          flex-wrap: wrap;
+          gap: var(--spacing-xs);
+          margin-bottom: var(--spacing-sm);
+        }
+
+        .connector-chip {
+          display: inline-flex;
+          align-items: center;
+          gap: var(--spacing-xs);
+          padding: 4px 8px;
+          background: var(--color-primary);
+          color: white;
+          border-radius: 16px;
+          font-size: 0.75rem;
+        }
+
+        .connector-chip button {
+          background: none;
+          border: none;
+          color: white;
+          cursor: pointer;
+          font-size: 12px;
+          padding: 0 2px;
+          opacity: 0.7;
+        }
+
+        .connector-chip button:hover {
+          opacity: 1;
+        }
+
+        .connector-controls {
+          margin-bottom: var(--spacing-sm);
+        }
+
+        .connector-controls label {
+          display: flex;
+          align-items: center;
+          gap: var(--spacing-sm);
+          font-size: 0.875rem;
+          font-weight: 500;
+        }
+
+        .connector-controls input[type="range"] {
+          flex: 1;
+          max-width: 150px;
+          accent-color: var(--color-primary);
+        }
+
+        .connector-results {
+          margin-top: var(--spacing-md);
+        }
+
+        .connector-results h5 {
+          margin-bottom: var(--spacing-sm);
+          font-size: 0.875rem;
+        }
+
+        .connector-list {
+          list-style: none;
+          margin: 0;
+          padding: 0;
+        }
+
+        .connector-item {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: var(--spacing-xs) 0;
+          border-bottom: 1px solid var(--border-color);
+          font-size: 0.875rem;
+        }
+
+        .connector-item:last-child {
+          border-bottom: none;
+        }
+
+        .connector-item a {
+          color: var(--color-primary);
+          text-decoration: none;
+        }
+
+        .connector-item a:hover {
+          text-decoration: underline;
+        }
+
+        .connector-count {
+          font-size: 0.75rem;
+          color: var(--text-muted);
         }
 
         @media (max-width: 900px) {
