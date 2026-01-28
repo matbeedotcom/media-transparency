@@ -4,6 +4,7 @@ All data source connectors must implement this interface
 to ensure consistent behavior and retry logic.
 """
 
+import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any, AsyncIterator, Generic, TypeVar
@@ -41,6 +42,7 @@ class IngestionResult(BaseModel):
     records_updated: int = 0
     duplicates_found: int = 0
     errors: list[dict[str, Any]] = []
+    log_output: str = ""
 
     @property
     def duration_seconds(self) -> float | None:
@@ -124,19 +126,33 @@ class BaseIngester(ABC, Generic[T]):
         """
         ...
 
-    async def run(self, config: IngestionConfig | None = None) -> IngestionResult:
+    async def run(
+        self, config: IngestionConfig | None = None, run_id: UUID | None = None
+    ) -> IngestionResult:
         """Run the ingestion process.
 
         Args:
             config: Optional ingestion configuration
+            run_id: Optional run ID (from API layer). If not provided, a new UUID is generated.
 
         Returns:
             Ingestion result with statistics
         """
+        from .run_log import start_capture, finish_capture, RunLogHandler
+
         if config is None:
             config = IngestionConfig()
 
-        self.run_id = uuid4()
+        self.run_id = run_id or uuid4()
+        run_id_str = str(self.run_id)
+
+        # Set up per-run log capture
+        start_capture(run_id_str)
+        handler = RunLogHandler(run_id_str)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        source_logger = logging.getLogger(f"mitds.ingestion.{self.source_name}")
+        source_logger.addHandler(handler)
+
         result = IngestionResult(
             run_id=self.run_id,
             source=self.source_name,
@@ -144,80 +160,116 @@ class BaseIngester(ABC, Generic[T]):
             started_at=datetime.utcnow(),
         )
 
-        log_ingestion_start(self.source_name, str(self.run_id))
-        self.logger.info(
-            "Starting ingestion",
-            extra={"config": config.model_dump(), "run_id": str(self.run_id)},
-        )
-
         try:
-            # If incremental, get last sync time
-            if config.incremental:
-                last_sync = await self.get_last_sync_time()
-                if last_sync:
-                    config.date_from = last_sync
-                    self.logger.info(
-                        f"Incremental sync from {last_sync.isoformat()}"
-                    )
-
-            # Process records
-            async for record in self.fetch_records(config):
-                try:
-                    process_result = await self.process_record(record)
-                    result.records_processed += 1
-
-                    if process_result.get("created"):
-                        result.records_created += 1
-                    elif process_result.get("updated"):
-                        result.records_updated += 1
-                    elif process_result.get("duplicate"):
-                        result.duplicates_found += 1
-
-                    # Check limit
-                    if config.limit and result.records_processed >= config.limit:
-                        self.logger.info(f"Reached limit of {config.limit} records")
-                        break
-
-                except Exception as e:
-                    error_info = {
-                        "record_id": getattr(record, "id", None),
-                        "error": str(e),
-                        "error_type": type(e).__name__,
-                    }
-                    result.errors.append(error_info)
-                    self.logger.warning(
-                        f"Error processing record: {e}",
-                        extra=error_info,
-                    )
-
-                    # Continue processing other records
-                    continue
-
-            # Mark as complete
-            result.status = "completed" if not result.errors else "partial"
-            result.completed_at = datetime.utcnow()
-
-            # Save sync time
-            if result.status in ("completed", "partial"):
-                await self.save_sync_time(result.started_at)
-
-            log_ingestion_complete(
-                self.source_name,
-                str(self.run_id),
-                result.records_processed,
-                result.duration_seconds or 0,
+            log_ingestion_start(self.source_name, run_id_str)
+            self.logger.info(
+                "Starting ingestion",
+                extra={"config": config.model_dump(), "run_id": run_id_str},
             )
 
-        except Exception as e:
-            result.status = "failed"
-            result.completed_at = datetime.utcnow()
-            result.errors.append({
-                "error": str(e),
-                "error_type": type(e).__name__,
-                "fatal": True,
-            })
-            log_ingestion_error(self.source_name, str(self.run_id), str(e))
-            self.logger.exception("Ingestion failed")
+            try:
+                # If incremental, get last sync time
+                if config.incremental:
+                    last_sync = await self.get_last_sync_time()
+                    if last_sync:
+                        config.date_from = last_sync
+                        self.logger.info(
+                            f"Incremental sync from {last_sync.isoformat()}"
+                        )
+
+                # Process records
+                async for record in self.fetch_records(config):
+                    record_name = getattr(record, "name", None) or getattr(record, "corporation_name", None) or getattr(record, "id", "unknown")
+                    try:
+                        process_result = await self.process_record(record)
+                        result.records_processed += 1
+
+                        if process_result.get("created"):
+                            result.records_created += 1
+                            action = "created"
+                        elif process_result.get("updated"):
+                            result.records_updated += 1
+                            action = "updated"
+                        elif process_result.get("duplicate"):
+                            result.duplicates_found += 1
+                            action = "skipped (duplicate)"
+                        else:
+                            action = "processed"
+
+                        entity_id = process_result.get("entity_id", "")
+                        self.logger.info(
+                            f"[{result.records_processed}] {action}: {record_name}"
+                            + (f" (entity={entity_id})" if entity_id else "")
+                        )
+
+                        # Progress update every 100 records
+                        if result.records_processed % 100 == 0:
+                            self.logger.info(
+                                f"Progress: {result.records_processed} processed, "
+                                f"{result.records_created} created, "
+                                f"{result.records_updated} updated, "
+                                f"{result.duplicates_found} duplicates, "
+                                f"{len(result.errors)} errors"
+                            )
+
+                        # Check limit
+                        if config.limit and result.records_processed >= config.limit:
+                            self.logger.info(f"Reached limit of {config.limit} records")
+                            break
+
+                    except Exception as e:
+                        result.records_processed += 1
+                        error_info = {
+                            "record_id": getattr(record, "id", None),
+                            "error": str(e),
+                            "error_type": type(e).__name__,
+                        }
+                        result.errors.append(error_info)
+                        self.logger.warning(
+                            f"[{result.records_processed}] FAILED: {record_name} — {e}",
+                            extra=error_info,
+                        )
+
+                        # Continue processing other records
+                        continue
+
+                # Summary
+                self.logger.info(
+                    f"Ingestion complete: {result.records_processed} processed, "
+                    f"{result.records_created} created, {result.records_updated} updated, "
+                    f"{result.duplicates_found} duplicates, {len(result.errors)} errors"
+                )
+
+                # Mark as complete
+                result.status = "completed" if not result.errors else "partial"
+                result.completed_at = datetime.utcnow()
+
+                # Save sync time
+                if result.status in ("completed", "partial"):
+                    await self.save_sync_time(result.started_at)
+
+                log_ingestion_complete(
+                    self.source_name,
+                    run_id_str,
+                    result.records_processed,
+                    result.duration_seconds or 0,
+                )
+
+            except Exception as e:
+                result.status = "failed"
+                result.completed_at = datetime.utcnow()
+                result.errors.append({
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                    "fatal": True,
+                })
+                log_ingestion_error(self.source_name, run_id_str, str(e))
+                self.logger.exception("Ingestion failed")
+
+        finally:
+            # Detach handler and flush captured logs
+            source_logger.removeHandler(handler)
+            result.log_output = finish_capture(run_id_str)
 
         return result
 

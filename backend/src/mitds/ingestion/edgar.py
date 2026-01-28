@@ -262,22 +262,28 @@ class SECEDGARIngester(BaseIngester[EDGARCompany]):
 
         if addresses := data.get("addresses", {}):
             if bus := addresses.get("business"):
+                # Combine street1 and street2 into single street field
+                street_parts = [bus.get("street1"), bus.get("street2")]
+                street = ", ".join(p for p in street_parts if p)
+                state_or_country = bus.get("stateOrCountry", "")
                 business_addr = Address(
-                    street1=bus.get("street1"),
-                    street2=bus.get("street2"),
+                    street=street or None,
                     city=bus.get("city"),
-                    state=bus.get("stateOrCountry"),
+                    state=state_or_country if len(state_or_country) == 2 else None,
                     postal_code=bus.get("zipCode"),
-                    country="US" if len(bus.get("stateOrCountry", "")) == 2 else bus.get("stateOrCountry"),
+                    country="US" if len(state_or_country) == 2 else state_or_country or "US",
                 )
             if mail := addresses.get("mailing"):
+                # Combine street1 and street2 into single street field
+                street_parts = [mail.get("street1"), mail.get("street2")]
+                street = ", ".join(p for p in street_parts if p)
+                state_or_country = mail.get("stateOrCountry", "")
                 mailing_addr = Address(
-                    street1=mail.get("street1"),
-                    street2=mail.get("street2"),
+                    street=street or None,
                     city=mail.get("city"),
-                    state=mail.get("stateOrCountry"),
+                    state=state_or_country if len(state_or_country) == 2 else None,
                     postal_code=mail.get("zipCode"),
-                    country="US" if len(mail.get("stateOrCountry", "")) == 2 else mail.get("stateOrCountry"),
+                    country="US" if len(state_or_country) == 2 else state_or_country or "US",
                 )
 
         # Count filings and get latest date
@@ -815,7 +821,7 @@ class SECEDGARIngester(BaseIngester[EDGARCompany]):
                 await db.execute(
                     text("""
                         UPDATE entities
-                        SET name = :name, metadata = :metadata, updated_at = NOW()
+                        SET name = :name, metadata = CAST(:metadata AS jsonb), updated_at = NOW()
                         WHERE id = :id
                     """),
                     {"id": row.id, "name": record.name, "metadata": json.dumps(entity_data["metadata"])},
@@ -827,7 +833,7 @@ class SECEDGARIngester(BaseIngester[EDGARCompany]):
                 await db.execute(
                     text("""
                         INSERT INTO entities (id, name, entity_type, external_ids, metadata, created_at)
-                        VALUES (:id, :name, :entity_type, :external_ids, :metadata, NOW())
+                        VALUES (:id, :name, :entity_type, CAST(:external_ids AS jsonb), CAST(:metadata AS jsonb), NOW())
                     """),
                     {
                         "id": new_id,
@@ -887,6 +893,20 @@ class SECEDGARIngester(BaseIngester[EDGARCompany]):
                     org_props["tickers"] = record.tickers
                 if record.exchanges:
                     org_props["exchanges"] = record.exchanges
+
+                # Store business address (prefer business over mailing)
+                address = record.business_address or record.mailing_address
+                if address:
+                    if address.street:
+                        org_props["address_street"] = address.street
+                    if address.city:
+                        org_props["address_city"] = address.city
+                    if address.state:
+                        org_props["address_state"] = address.state
+                    if address.postal_code:
+                        org_props["address_postal"] = address.postal_code
+                    if address.country:
+                        org_props["address_country"] = address.country
 
                 check_result = await session.run(
                     "MATCH (o:Organization {sec_cik: $cik}) RETURN o.id as id",
@@ -1071,7 +1091,9 @@ class SECEDGARIngester(BaseIngester[EDGARCompany]):
                     if not xml_content:
                         continue
 
-                    insiders = self.parse_form4_xml(xml_content, filing)
+                    insiders = await asyncio.to_thread(
+                        self.parse_form4_xml, xml_content, filing
+                    )
 
                     for insider in insiders:
                         try:
@@ -1182,6 +1204,7 @@ async def run_sec_edgar_ingestion(
     parse_ownership: bool = True,
     parse_insiders: bool = True,
     target_entities: list[str] | None = None,
+    run_id: UUID | None = None,
 ) -> dict[str, Any]:
     """Run SEC EDGAR ingestion.
 
@@ -1191,6 +1214,7 @@ async def run_sec_edgar_ingestion(
         parse_ownership: Whether to parse 13D/13G ownership filings
         parse_insiders: Whether to parse Form 4 insider transaction filings
         target_entities: Optional list of CIKs to ingest specifically
+        run_id: Optional run ID from API layer
 
     Returns:
         Ingestion result dictionary
@@ -1206,15 +1230,7 @@ async def run_sec_edgar_ingestion(
             target_entities=target_entities,
         )
 
-        result = await ingester.run(config)
-
-        return {
-            "status": result.status,
-            "records_processed": result.records_processed,
-            "records_created": result.records_created,
-            "records_updated": result.records_updated,
-            "duplicates_found": result.duplicates_found,
-            "errors": result.errors,
-        }
+        result = await ingester.run(config, run_id=run_id)
+        return result.model_dump()
     finally:
         await ingester.close()

@@ -5,13 +5,14 @@
  * and monitoring data ingestion across all sources.
  */
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getIngestionStatus,
   searchIngestionSources,
   triggerIngestion,
   getIngestionRuns,
+  getIngestionRunLogs,
   listJobs,
   cancelJob,
   getJobResult,
@@ -86,6 +87,11 @@ export default function IngestionPage() {
   const [historyStatusFilter, setHistoryStatusFilter] = useState('');
   const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
 
+  // Log viewer state
+  const [logLines, setLogLines] = useState<string[]>([]);
+  const [logOffset, setLogOffset] = useState(0);
+  const logEndRef = useRef<HTMLDivElement>(null);
+
   // ========================
   // Queries
   // ========================
@@ -134,6 +140,35 @@ export default function IngestionPage() {
     }),
     enabled: activeTab === 'history',
   });
+
+  // Log viewer query (polls while live)
+  const { data: logData } = useQuery({
+    queryKey: ['run-logs', expandedRunId, logOffset],
+    queryFn: () => getIngestionRunLogs(expandedRunId!, logOffset),
+    enabled: !!expandedRunId,
+    refetchInterval: (query) => {
+      return query.state.data?.is_live ? 2000 : false;
+    },
+  });
+
+  // Accumulate new log lines when data arrives
+  useEffect(() => {
+    if (logData && logData.lines.length > 0) {
+      setLogLines((prev) => [...prev, ...logData.lines]);
+      setLogOffset(logData.total_lines);
+    }
+  }, [logData]);
+
+  // Reset log state when expanded run changes
+  useEffect(() => {
+    setLogLines([]);
+    setLogOffset(0);
+  }, [expandedRunId]);
+
+  // Auto-scroll to bottom when new log lines arrive
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [logLines]);
 
   // ========================
   // Mutations
@@ -834,6 +869,24 @@ export default function IngestionPage() {
                                     </ul>
                                   </div>
                                 )}
+                                <div className="run-log-viewer">
+                                  <div className="run-log-header">
+                                    <strong>Log Output</strong>
+                                    {logData?.is_live && (
+                                      <span className="log-live-indicator">Live</span>
+                                    )}
+                                  </div>
+                                  {logLines.length > 0 ? (
+                                    <pre className="log-output">
+                                      {logLines.join('\n')}
+                                      <div ref={logEndRef} />
+                                    </pre>
+                                  ) : (
+                                    <p className="text-muted" style={{ fontSize: '0.8125rem' }}>
+                                      {logData === undefined ? 'Loading logs...' : 'No log output available'}
+                                    </p>
+                                  )}
+                                </div>
                               </div>
                             </td>
                           </tr>
@@ -968,21 +1021,25 @@ export default function IngestionPage() {
           margin-bottom: var(--spacing-md);
         }
 
-        .search-input {
-          flex: 1;
+        .search-row .search-input {
+          flex: 1 1 0%;
+          width: auto;
+          min-width: 0;
           padding: 10px 14px;
           border: 1px solid var(--border-color);
           border-radius: var(--border-radius);
           font-size: 0.9375rem;
         }
 
-        .search-input:focus {
+        .search-row .search-input:focus {
           outline: none;
           border-color: var(--color-primary);
           box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
         }
 
-        .source-select {
+        .search-row .source-select {
+          flex: 0 0 auto;
+          width: auto;
           padding: 10px 14px;
           border: 1px solid var(--border-color);
           border-radius: var(--border-radius);
@@ -1041,6 +1098,10 @@ export default function IngestionPage() {
 
         .result-row:hover {
           background: var(--bg-tertiary);
+        }
+
+        .result-row input[type="checkbox"] {
+          width: auto;
         }
 
         .result-row-selected {
@@ -1108,7 +1169,11 @@ export default function IngestionPage() {
           font-weight: 500;
         }
 
-        .config-input {
+        .config-label input[type="checkbox"] {
+          width: auto;
+        }
+
+        .config-row .config-input {
           width: 100px;
           padding: 4px 8px;
           border: 1px solid var(--border-color);
@@ -1238,6 +1303,7 @@ export default function IngestionPage() {
         }
 
         .filter-row select {
+          width: auto;
           padding: 8px 12px;
           border: 1px solid var(--border-color);
           border-radius: var(--border-radius);
@@ -1278,6 +1344,49 @@ export default function IngestionPage() {
 
         .run-errors li {
           margin-bottom: var(--spacing-xs);
+        }
+
+        .run-log-viewer {
+          margin-top: var(--spacing-md);
+        }
+
+        .run-log-header {
+          display: flex;
+          align-items: center;
+          gap: var(--spacing-sm);
+          margin-bottom: var(--spacing-sm);
+          font-size: 0.8125rem;
+        }
+
+        .log-output {
+          background: #1e1e1e;
+          color: #d4d4d4;
+          padding: var(--spacing-md);
+          border-radius: var(--border-radius);
+          font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+          font-size: 0.75rem;
+          line-height: 1.6;
+          max-height: 400px;
+          overflow-y: auto;
+          white-space: pre-wrap;
+          word-break: break-all;
+          margin: 0;
+        }
+
+        .log-live-indicator {
+          display: inline-block;
+          padding: 2px 8px;
+          background: rgba(34, 197, 94, 0.15);
+          color: var(--color-success);
+          border-radius: 4px;
+          font-size: 0.6875rem;
+          font-weight: 600;
+          animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.5; }
         }
 
         /* Shared */

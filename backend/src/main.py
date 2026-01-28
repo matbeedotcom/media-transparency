@@ -33,6 +33,33 @@ async def lifespan(app: FastAPI):
         },
     )
 
+    # Cancel orphaned ingestion runs from previous server lifetime
+    try:
+        from mitds.db import get_db_session
+        from sqlalchemy import text
+        from datetime import datetime
+
+        async with get_db_session() as db:
+            result = await db.execute(
+                text("""
+                    UPDATE ingestion_runs
+                    SET status = 'cancelled',
+                        completed_at = :now,
+                        errors = COALESCE(errors, CAST('[]' AS jsonb)) || CAST(:err AS jsonb)
+                    WHERE status IN ('running', 'pending')
+                """),
+                {
+                    "now": datetime.utcnow(),
+                    "err": '[{"error": "Server restarted - run cancelled"}]',
+                },
+            )
+            if result.rowcount > 0:
+                logger.info(
+                    f"Cancelled {result.rowcount} orphaned ingestion run(s) from previous session"
+                )
+    except Exception as e:
+        logger.warning(f"Failed to clean up orphaned ingestion runs: {e}")
+
     # Warm up search cache in background (non-blocking)
     from mitds.ingestion.search import warmup_search_cache
     asyncio.create_task(warmup_search_cache())

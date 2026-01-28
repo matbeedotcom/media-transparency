@@ -1,5 +1,6 @@
 """Ingestion API endpoints for MITDS."""
 
+import json
 from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
@@ -295,6 +296,57 @@ async def get_ingestion_run(
         )
 
 
+@router.get("/runs/{run_id}/logs")
+async def get_ingestion_run_logs(
+    run_id: UUID,
+    offset: int = 0,
+    user: OptionalUser = None,
+) -> dict[str, Any]:
+    """Get log output for an ingestion run.
+
+    For active runs, returns logs from the in-memory buffer.
+    For completed runs, returns logs from the database.
+
+    Args:
+        run_id: The ingestion run ID
+        offset: Line offset for incremental polling
+    """
+    from ..ingestion.run_log import get_live_logs
+
+    # Try in-memory buffer first (active run)
+    live_lines = get_live_logs(str(run_id), offset=offset)
+    if live_lines is not None:
+        return {
+            "lines": live_lines,
+            "total_lines": offset + len(live_lines),
+            "is_live": True,
+        }
+
+    # Fall back to database (completed run)
+    async with get_db_session() as db:
+        query = text("""
+            SELECT log_output, status
+            FROM ingestion_runs
+            WHERE id = :run_id
+        """)
+        result = await db.execute(query, {"run_id": run_id})
+        row = result.fetchone()
+
+        if not row:
+            from . import NotFoundError
+            raise NotFoundError("Ingestion run", run_id)
+
+        log_text = row.log_output or ""
+        all_lines = log_text.split("\n") if log_text else []
+        sliced = all_lines[offset:]
+
+        return {
+            "lines": sliced,
+            "total_lines": len(all_lines),
+            "is_live": False,
+        }
+
+
 # =========================
 # Trigger Ingestion
 # =========================
@@ -309,6 +361,7 @@ async def _run_ingestion_task(
     from ..ingestion import run_irs990_ingestion, run_cra_ingestion
     from ..ingestion.edgar import run_sec_edgar_ingestion
     from ..ingestion.canada_corps import run_canada_corps_ingestion
+    from ..ingestion.meta_ads import run_meta_ads_ingestion
 
     try:
         if source == "irs990":
@@ -318,22 +371,33 @@ async def _run_ingestion_task(
                 incremental=request.incremental,
                 limit=request.limit,
                 target_entities=request.target_entities,
+                run_id=run_id,
             )
         elif source == "cra":
             result = await run_cra_ingestion(
                 incremental=request.incremental,
                 limit=request.limit,
                 target_entities=request.target_entities,
+                run_id=run_id,
             )
         elif source == "sec_edgar":
             result = await run_sec_edgar_ingestion(
                 limit=request.limit,
                 target_entities=request.target_entities,
+                run_id=run_id,
             )
         elif source == "canada_corps":
             result = await run_canada_corps_ingestion(
                 limit=request.limit,
                 target_entities=request.target_entities,
+                run_id=run_id,
+            )
+        elif source == "meta_ads":
+            result = await run_meta_ads_ingestion(
+                countries=["US", "CA"],
+                days_back=7,
+                incremental=request.incremental,
+                limit=request.limit,
             )
         else:
             # Not implemented yet
@@ -352,7 +416,8 @@ async def _run_ingestion_task(
                     records_created = :records_created,
                     records_updated = :records_updated,
                     duplicates_found = :duplicates_found,
-                    errors = :errors
+                    errors = CAST(:errors AS jsonb),
+                    log_output = :log_output
                 WHERE id = :run_id
             """)
 
@@ -366,19 +431,25 @@ async def _run_ingestion_task(
                     "records_created": result.get("records_created", 0),
                     "records_updated": result.get("records_updated", 0),
                     "duplicates_found": result.get("duplicates_found", 0),
-                    "errors": result.get("errors", []),
+                    "errors": json.dumps(result.get("errors", []), default=str),
+                    "log_output": result.get("log_output", ""),
                 },
             )
             await db.commit()
 
     except Exception as e:
+        # Flush any captured logs before recording error
+        from ..ingestion.run_log import finish_capture
+        error_log_output = finish_capture(str(run_id))
+
         # Update run with error
         async with get_db_session() as db:
             error_query = text("""
                 UPDATE ingestion_runs
                 SET status = 'failed',
                     completed_at = :completed_at,
-                    errors = :errors
+                    errors = CAST(:errors AS jsonb),
+                    log_output = :log_output
                 WHERE id = :run_id
             """)
 
@@ -387,7 +458,8 @@ async def _run_ingestion_task(
                 {
                     "run_id": run_id,
                     "completed_at": datetime.utcnow(),
-                    "errors": [{"error": str(e), "fatal": True}],
+                    "errors": json.dumps([{"error": str(e), "fatal": True}]),
+                    "log_output": error_log_output,
                 },
             )
             await db.commit()
@@ -419,11 +491,21 @@ async def trigger_ingestion(
             f"Invalid source: {source}. Must be one of {valid_sources}"
         )
 
-    if source in ["opencorporates", "meta_ads"]:
+    if source == "opencorporates":
         raise HTTPException(
             status_code=501,
             detail=f"Source '{source}' requires API key configuration"
         )
+
+    # Check Meta ads configuration
+    if source == "meta_ads":
+        from ..config import get_settings
+        settings = get_settings()
+        if not settings.meta_access_token:
+            raise HTTPException(
+                status_code=501,
+                detail="Meta Ads requires META_ACCESS_TOKEN to be configured"
+            )
 
     if request is None:
         request = IngestionTriggerRequest()

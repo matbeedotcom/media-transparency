@@ -15,11 +15,14 @@ from typing import Any
 
 import click
 
+from ..logging import setup_logging
+
 
 @click.group(name="ingest")
 def cli():
     """Data ingestion commands."""
-    pass
+    # Initialize logging for CLI
+    setup_logging()
 
 
 @cli.command(name="irs990")
@@ -449,6 +452,220 @@ def ingest_canada_corps(
         sys.exit(1)
 
 
+@cli.command(name="lobbying")
+@click.option(
+    "--incremental/--full",
+    default=True,
+    help="Incremental or full sync (default: incremental)",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum number of registrations to process",
+)
+@click.option(
+    "--target",
+    type=str,
+    default=None,
+    help="Comma-separated client/registrant names to filter",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Enable verbose output",
+)
+def ingest_lobbying(
+    incremental: bool,
+    limit: int | None,
+    target: str | None,
+    verbose: bool,
+):
+    """Ingest Canada Lobbying Registry data.
+
+    Downloads lobbying registrations and communication reports from
+    the Office of the Commissioner of Lobbying of Canada.
+
+    Creates relationships between lobbyists, their clients, and
+    government institutions being lobbied.
+
+    Free data - no key required.
+
+    Examples:
+
+        # Full sync
+        mitds ingest lobbying
+
+        # Test with limited records
+        mitds ingest lobbying --limit 100 --verbose
+
+        # Target specific organizations
+        mitds ingest lobbying --target "National Citizens Coalition,Fraser Institute"
+    """
+    from ..ingestion.lobbying import run_lobbying_ingestion
+
+    click.echo("Starting Lobbying Registry ingestion...")
+
+    target_entities = None
+    if target:
+        target_entities = [t.strip() for t in target.split(",")]
+
+    if verbose:
+        click.echo(f"  Mode: {'incremental' if incremental else 'full'}")
+        if limit:
+            click.echo(f"  Limit: {limit} registrations")
+        if target_entities:
+            click.echo(f"  Target entities: {target_entities}")
+
+    start_time = datetime.now()
+
+    try:
+        result = asyncio.run(
+            run_lobbying_ingestion(
+                incremental=incremental,
+                limit=limit,
+                target_entities=target_entities,
+            )
+        )
+
+        duration = (datetime.now() - start_time).total_seconds()
+
+        _print_result(result, duration, verbose)
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        if verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
+@cli.command(name="elections-canada")
+@click.option(
+    "--incremental/--full",
+    default=True,
+    help="Incremental or full sync (default: incremental)",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum number of third parties to process",
+)
+@click.option(
+    "--target",
+    type=str,
+    default=None,
+    help="Comma-separated third party names to filter",
+)
+@click.option(
+    "--elections",
+    type=str,
+    default=None,
+    help="Comma-separated election IDs (e.g., '44,45' for 44th and 45th GE)",
+)
+@click.option(
+    "--parse-pdfs",
+    is_flag=True,
+    help="Download and parse PDF financial returns for detailed expenses/suppliers",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Enable verbose output",
+)
+def ingest_elections_canada(
+    incremental: bool,
+    limit: int | None,
+    target: str | None,
+    elections: str | None,
+    parse_pdfs: bool,
+    verbose: bool,
+):
+    """Ingest Elections Canada third party data.
+
+    Downloads third party registration and advertising expense data
+    from Elections Canada for federal elections.
+
+    Creates:
+    - Organization nodes for third parties
+    - Election nodes for federal elections
+    - REGISTERED_FOR relationships between organizations and elections
+    - ADVERTISED_ON relationships for advertising expenses by media type
+    - Person/Organization nodes for financial agents and auditors
+
+    With --parse-pdfs (requires pdfplumber):
+    - Vendor nodes for advertising suppliers (Facebook, radio stations, etc.)
+    - PAID_BY relationships showing money flow from third parties to vendors
+    - Person nodes for individual contributors (>$200)
+    - CONTRIBUTED_TO relationships showing who funded the third party
+
+    Free data - no key required.
+
+    Examples:
+
+        # Process all elections
+        mitds ingest elections-canada
+
+        # Process specific elections
+        mitds ingest elections-canada --elections 44,45
+
+        # Target specific organizations with full expense/supplier data
+        mitds ingest elections-canada --target "National Citizens Coalition" --parse-pdfs
+
+        # Test with limited records
+        mitds ingest elections-canada --limit 10 --verbose
+    """
+    from ..ingestion.elections_canada import run_elections_canada_ingestion
+
+    click.echo("Starting Elections Canada ingestion...")
+
+    target_entities = None
+    if target:
+        target_entities = [t.strip() for t in target.split(",")]
+
+    election_ids = None
+    if elections:
+        election_ids = [e.strip() for e in elections.split(",")]
+
+    if verbose:
+        click.echo(f"  Mode: {'incremental' if incremental else 'full'}")
+        if limit:
+            click.echo(f"  Limit: {limit} third parties")
+        if target_entities:
+            click.echo(f"  Target entities: {target_entities}")
+        if election_ids:
+            click.echo(f"  Elections: {election_ids}")
+        if parse_pdfs:
+            click.echo("  Parse PDFs: enabled (will extract suppliers/contributors)")
+
+    start_time = datetime.now()
+
+    try:
+        result = asyncio.run(
+            run_elections_canada_ingestion(
+                incremental=incremental,
+                limit=limit,
+                target_entities=target_entities,
+                elections=election_ids,
+                parse_pdfs=parse_pdfs,
+            )
+        )
+
+        duration = (datetime.now() - start_time).total_seconds()
+
+        _print_result(result, duration, verbose)
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        if verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
 @cli.command(name="status")
 def ingestion_status():
     """Show status of all ingestion pipelines."""
@@ -478,7 +695,7 @@ def ingestion_status():
         click.echo("\nIngestion Pipeline Status")
         click.echo("=" * 60)
 
-        sources = ["irs990", "cra", "sec_edgar", "canada_corps", "opencorporates", "meta_ads"]
+        sources = ["irs990", "cra", "sec_edgar", "canada_corps", "opencorporates", "meta_ads", "lobbying", "elections_canada"]
         run_by_source = {r.source: r for r in runs}
 
         for source in sources:
@@ -548,4 +765,5 @@ main.add_command(cli)
 
 
 if __name__ == "__main__":
-    main()
+    # When run directly as a module, use the ingest group directly
+    cli()

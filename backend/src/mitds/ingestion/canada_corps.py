@@ -20,8 +20,11 @@ import asyncio
 import csv
 import io
 import json
+import os
+import time
 import zipfile
 from datetime import datetime, date
+from pathlib import Path
 from typing import Any, AsyncIterator
 from uuid import UUID, uuid4
 
@@ -44,8 +47,18 @@ from .base import BaseIngester, IngestionConfig, IngestionResult, with_retry
 
 logger = get_context_logger(__name__)
 
+# Disk cache for bulk data downloads (avoids re-downloading 200+ MB ZIP)
+_BULK_CACHE_DIR = Path(
+    os.environ.get(
+        "MITDS_CACHE_DIR",
+        str(Path(__file__).resolve().parents[4] / ".cache" / "mitds"),
+    )
+) / "ingestion"
+_BULK_CACHE_TTL_HOURS = 24
+
 # ISED API endpoints
 ISED_API_BASE = "https://ised-isde.canada.ca/cc/lgcy"
+ISED_API_V2_BASE = "https://apigateway-passerelledapi.ised-isde.canada.ca/corporations/api/v2"
 
 # Open Government Portal bulk data
 OPEN_DATA_CORPORATIONS_URL = "https://open.canada.ca/data/en/dataset/0032ce54-c5dd-4b66-99a0-320a7b5e99f2"
@@ -164,12 +177,113 @@ class CanadaCorporationsIngester(BaseIngester[CanadaCorporation]):
         """Save sync timestamp (handled by base class run method)."""
         pass
 
+    async def fetch_directors(self, corporation_number: str) -> list[CanadaDirector]:
+        """Fetch directors for a corporation from the ISED v2 API.
+
+        Requires ISED_API_KEY to be configured. Returns empty list if
+        API key is not set or the request fails.
+
+        Args:
+            corporation_number: 7-digit federal corporation number
+
+        Returns:
+            List of parsed director records
+        """
+        settings = get_settings()
+        if not settings.ised_api_key:
+            self.logger.debug("ISED API key not configured, skipping director fetch")
+            return []
+
+        self.logger.info(f"  Fetching directors from ISED API for corp #{corporation_number}")
+        url = f"{ISED_API_V2_BASE}/corporations/{corporation_number}/directors"
+        try:
+            response = await self.http_client.get(
+                url,
+                headers={
+                    "user-key": settings.ised_api_key,
+                    "Accept-Language": "en",
+                    "Accept": "application/json",
+                },
+                timeout=30.0,
+            )
+            response.raise_for_status()
+            data = response.json()
+            self.logger.debug(f"  ISED API response: {data}")
+
+            # Handle HAL+JSON format: directors are in _embedded.directors
+            directors = []
+            director_list = (
+                data.get("_embedded", {}).get("directors", [])
+                or data.get("directors", [])
+                or (data if isinstance(data, list) else [])
+            )
+            for d in director_list:
+                # Build name from parts
+                parts = [
+                    d.get("firstName", ""),
+                    d.get("middleName", ""),
+                    d.get("lastName", ""),
+                ]
+                name = " ".join(p for p in parts if p).strip()
+                if not name:
+                    continue
+
+                # Parse address if present
+                addr = None
+                if d.get("serviceAddress"):
+                    sa = d["serviceAddress"]
+                    addr = Address(
+                        street=sa.get("line1", ""),
+                        city=sa.get("city", ""),
+                        state=sa.get("subdivisionCode", ""),
+                        postal_code=sa.get("postalCode", ""),
+                        country="CA",
+                    )
+
+                directors.append(CanadaDirector(
+                    name=name,
+                    address=addr,
+                ))
+
+            return directors
+
+        except httpx.HTTPStatusError as e:
+            self.logger.warning(
+                f"ISED API returned {e.response.status_code} for corp #{corporation_number}"
+            )
+            return []
+        except Exception as e:
+            self.logger.warning(f"Failed to fetch directors for corp #{corporation_number}: {e}")
+            return []
+
     async def fetch_bulk_data(self) -> bytes:
         """Download bulk data ZIP from Open Government Portal.
+
+        Uses disk caching to avoid re-downloading the ~200 MB ZIP file
+        on every ingestion run. Cached file expires after 24 hours.
 
         Returns:
             ZIP file contents as bytes
         """
+        cache_file = _BULK_CACHE_DIR / "canada_corps_bulk.zip"
+        meta_file = _BULK_CACHE_DIR / "canada_corps_bulk.meta"
+
+        # Check disk cache
+        if cache_file.exists() and meta_file.exists():
+            try:
+                meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                age_hours = (time.time() - meta.get("fetched_at", 0)) / 3600
+                if age_hours < _BULK_CACHE_TTL_HOURS:
+                    self.logger.info(
+                        f"Using cached bulk data ({age_hours:.1f}h old, "
+                        f"{cache_file.stat().st_size / 1_000_000:.1f} MB)"
+                    )
+                    return await asyncio.to_thread(cache_file.read_bytes)
+                self.logger.info(f"Bulk data cache expired ({age_hours:.1f}h old), re-downloading")
+            except Exception as e:
+                self.logger.warning(f"Failed to read bulk data cache: {e}")
+
+        # Download fresh copy
         self.logger.info("Downloading Canada Corporations bulk data...")
 
         async def _fetch():
@@ -177,7 +291,23 @@ class CanadaCorporationsIngester(BaseIngester[CanadaCorporation]):
             response.raise_for_status()
             return response.content
 
-        return await with_retry(_fetch, logger=self.logger)
+        content = await with_retry(_fetch, logger=self.logger)
+
+        # Save to disk cache
+        try:
+            _BULK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(cache_file.write_bytes, content)
+            meta_file.write_text(
+                json.dumps({"fetched_at": time.time(), "size_bytes": len(content)}),
+                encoding="utf-8",
+            )
+            self.logger.info(
+                f"Cached bulk data to disk ({len(content) / 1_000_000:.1f} MB)"
+            )
+        except Exception as e:
+            self.logger.warning(f"Failed to cache bulk data to disk: {e}")
+
+        return content
 
     def parse_bulk_data(self, zip_content: bytes) -> list[dict[str, Any]]:
         """Parse the bulk data ZIP file.
@@ -365,7 +495,7 @@ class CanadaCorporationsIngester(BaseIngester[CanadaCorporation]):
         address = None
         if any(row.get(f) for f in ["Street", "City", "Province", "street", "city", "province"]):
             address = Address(
-                street1=row.get("Street") or row.get("street"),
+                street=row.get("Street") or row.get("street"),
                 city=row.get("City") or row.get("city"),
                 state=row.get("Province") or row.get("province"),
                 postal_code=row.get("Postal Code") or row.get("postal_code"),
@@ -401,7 +531,7 @@ class CanadaCorporationsIngester(BaseIngester[CanadaCorporation]):
             self.logger.info(f"Downloaded {len(zip_content)} bytes")
 
             # Parse bulk data
-            raw_records = self.parse_bulk_data(zip_content)
+            raw_records = await asyncio.to_thread(self.parse_bulk_data, zip_content)
             self.logger.info(f"Parsed {len(raw_records)} raw records")
 
             # Filter by target entities (corporation numbers) if specified
@@ -425,6 +555,12 @@ class CanadaCorporationsIngester(BaseIngester[CanadaCorporation]):
                 corp = self.parse_corporation(row)
                 if corp:
                     yield corp
+                else:
+                    self.logger.warning(
+                        f"Failed to parse corporation record: "
+                        f"corp_num={row.get('corporation_number', 'missing')}, "
+                        f"name={row.get('corporation_name', 'missing')}"
+                    )
 
         except zipfile.BadZipFile:
             self.logger.error("Invalid ZIP file received from Open Government Portal")
@@ -443,6 +579,10 @@ class CanadaCorporationsIngester(BaseIngester[CanadaCorporation]):
             Processing result with entity IDs
         """
         result = {"created": False, "updated": False, "entity_id": None}
+        self.logger.info(
+            f"Processing: {record.corporation_name} "
+            f"(corp #{record.corporation_number}, type={record.corporation_type}, status={record.status})"
+        )
 
         async with get_db_session() as db:
             from sqlalchemy import text
@@ -486,20 +626,21 @@ class CanadaCorporationsIngester(BaseIngester[CanadaCorporation]):
                 await db.execute(
                     text("""
                         UPDATE entities
-                        SET name = :name, metadata = :metadata, updated_at = NOW()
+                        SET name = :name, metadata = CAST(:metadata AS jsonb), updated_at = NOW()
                         WHERE id = :id
                     """),
                     {"id": row.id, "name": record.corporation_name, "metadata": json.dumps(entity_data["metadata"])},
                 )
                 result["updated"] = True
                 result["entity_id"] = str(row.id)
+                self.logger.info(f"  PostgreSQL: updated existing entity {row.id}")
             else:
                 # Create new
                 new_id = uuid4()
                 await db.execute(
                     text("""
                         INSERT INTO entities (id, name, entity_type, external_ids, metadata, created_at)
-                        VALUES (:id, :name, :entity_type, :external_ids, :metadata, NOW())
+                        VALUES (:id, :name, :entity_type, CAST(:external_ids AS jsonb), CAST(:metadata AS jsonb), NOW())
                     """),
                     {
                         "id": new_id,
@@ -511,6 +652,7 @@ class CanadaCorporationsIngester(BaseIngester[CanadaCorporation]):
                 )
                 result["created"] = True
                 result["entity_id"] = str(new_id)
+                self.logger.info(f"  PostgreSQL: created new entity {new_id}")
 
             await db.commit()
 
@@ -533,6 +675,167 @@ class CanadaCorporationsIngester(BaseIngester[CanadaCorporation]):
                 },
             )
             await db.commit()
+            self.logger.info(f"  Evidence: recorded (type={EvidenceType.CANADA_CORP_RECORD.value})")
+
+        # --- Neo4j Organization node upsert (with CRA cross-linking) ---
+        try:
+            async with get_neo4j_session() as session:
+                now = datetime.utcnow().isoformat()
+
+                org_props = {
+                    "id": result["entity_id"],
+                    "name": record.corporation_name,
+                    "entity_type": "ORGANIZATION",
+                    "org_type": org_type.value,
+                    "status": org_status.value,
+                    "jurisdiction": "CA",
+                    "canada_corp_num": record.corporation_number,
+                    "confidence": 0.95,
+                    "updated_at": now,
+                }
+
+                if record.business_number:
+                    org_props["bn"] = record.business_number
+                if record.corporation_type:
+                    org_props["corporation_type"] = record.corporation_type
+                if record.registered_office:
+                    if record.registered_office.street:
+                        org_props["address_street"] = record.registered_office.street
+                    if record.registered_office.city:
+                        org_props["address_city"] = record.registered_office.city
+                    if record.registered_office.state:
+                        org_props["address_state"] = record.registered_office.state
+                    if record.registered_office.postal_code:
+                        org_props["address_postal"] = record.registered_office.postal_code
+                    if record.registered_office.country:
+                        org_props["address_country"] = record.registered_office.country
+
+                # --- CRA cross-link: check if CRA already has an org with matching BN ---
+                cra_linked = False
+                if record.business_number:
+                    cra_check = await session.run(
+                        """
+                        MATCH (o:Organization)
+                        WHERE o.bn STARTS WITH $bn_prefix AND o.bn <> $bn_prefix
+                        RETURN o.id as id, o.bn as bn
+                        LIMIT 1
+                        """,
+                        bn_prefix=record.business_number,
+                    )
+                    cra_node = await cra_check.single()
+
+                    if cra_node:
+                        # CRA node exists — merge into it
+                        org_props.pop("created_at", None)
+                        await session.run(
+                            """
+                            MATCH (o:Organization {bn: $bn})
+                            SET o.canada_corp_num = $corp_num,
+                                o += $props
+                            """,
+                            bn=cra_node["bn"],
+                            corp_num=record.corporation_number,
+                            props=org_props,
+                        )
+                        cra_linked = True
+                        self.logger.info(
+                            f"  Neo4j: cross-linked with CRA node (BN={cra_node['bn']})"
+                        )
+
+                if not cra_linked:
+                    # Normal MERGE on canada_corp_num
+                    check_result = await session.run(
+                        "MATCH (o:Organization {canada_corp_num: $corp_num}) RETURN o.id as id",
+                        corp_num=record.corporation_number,
+                    )
+                    existing_node = await check_result.single()
+
+                    if not existing_node:
+                        org_props["created_at"] = now
+
+                    await session.run(
+                        """
+                        MERGE (o:Organization {canada_corp_num: $corp_num})
+                        SET o += $props
+                        RETURN o.id as id
+                        """,
+                        corp_num=record.corporation_number,
+                        props=org_props,
+                    )
+                    neo4j_action = "updated" if existing_node else "created"
+                    self.logger.info(
+                        f"  Neo4j: {neo4j_action} Organization node (corp #{record.corporation_number})"
+                    )
+
+                # --- Fetch and create Director nodes + DIRECTOR_OF relationships ---
+                directors = record.directors
+                if not directors:
+                    fetched = await self.fetch_directors(record.corporation_number)
+                    directors = [d.model_dump() for d in fetched]
+
+                if directors:
+                    self.logger.info(f"  Directors: processing {len(directors)} directors")
+                    dir_created = 0
+                    for director in directors:
+                        d_name = director.get("name", "") if isinstance(director, dict) else director.name
+                        if not d_name:
+                            continue
+
+                        person_id = str(uuid4())
+                        person_props = {
+                            "id": person_id,
+                            "name": d_name,
+                            "entity_type": "PERSON",
+                            "confidence": 0.9,
+                            "updated_at": now,
+                        }
+
+                        # MERGE Person node
+                        await session.run(
+                            """
+                            MERGE (p:Person {name: $name})
+                            ON CREATE SET p += $create_props
+                            SET p.updated_at = $now
+                            RETURN p.id as id
+                            """,
+                            name=d_name,
+                            create_props=person_props,
+                            now=now,
+                        )
+
+                        # Build DIRECTOR_OF relationship properties
+                        rel_props = {
+                            "confidence": 0.95,
+                            "source": "canada_corps",
+                            "updated_at": now,
+                        }
+                        appt = director.get("appointment_date") if isinstance(director, dict) else director.appointment_date
+                        cess = director.get("cessation_date") if isinstance(director, dict) else director.cessation_date
+                        if appt:
+                            rel_props["valid_from"] = str(appt)
+                        if cess:
+                            rel_props["valid_to"] = str(cess)
+
+                        # Create DIRECTOR_OF relationship
+                        await session.run(
+                            """
+                            MATCH (p:Person {name: $person_name})
+                            MATCH (o:Organization {canada_corp_num: $corp_num})
+                            MERGE (p)-[r:DIRECTOR_OF]->(o)
+                            SET r += $props
+                            """,
+                            person_name=d_name,
+                            corp_num=record.corporation_number,
+                            props=rel_props,
+                        )
+                        dir_created += 1
+
+                    self.logger.info(f"  Neo4j: created {dir_created} DIRECTOR_OF relationships")
+                else:
+                    self.logger.info("  Directors: none found (ISED API key not configured or no data)")
+
+        except Exception as e:
+            self.logger.warning(f"  Neo4j: FAILED for {record.corporation_name} — {e}")
 
         return result
 
@@ -541,6 +844,7 @@ async def run_canada_corps_ingestion(
     limit: int | None = None,
     incremental: bool = True,
     target_entities: list[str] | None = None,
+    run_id: UUID | None = None,
 ) -> dict[str, Any]:
     """Run Canada Corporations ingestion.
 
@@ -548,6 +852,7 @@ async def run_canada_corps_ingestion(
         limit: Maximum number of corporations to process
         incremental: Whether to do incremental sync
         target_entities: Optional list of corporation numbers to ingest specifically
+        run_id: Optional run ID from API layer
 
     Returns:
         Ingestion result dictionary
@@ -561,15 +866,7 @@ async def run_canada_corps_ingestion(
             target_entities=target_entities,
         )
 
-        result = await ingester.run(config)
-
-        return {
-            "status": result.status,
-            "records_processed": result.records_processed,
-            "records_created": result.records_created,
-            "records_updated": result.records_updated,
-            "duplicates_found": result.duplicates_found,
-            "errors": result.errors,
-        }
+        result = await ingester.run(config, run_id=run_id)
+        return result.model_dump()
     finally:
         await ingester.close()

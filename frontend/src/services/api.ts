@@ -673,6 +673,22 @@ export const getIngestionRun = async (id: string): Promise<IngestionRun> => {
   return response.data;
 };
 
+export interface IngestionRunLogs {
+  lines: string[];
+  total_lines: number;
+  is_live: boolean;
+}
+
+export const getIngestionRunLogs = async (
+  runId: string,
+  offset: number = 0,
+): Promise<IngestionRunLogs> => {
+  const response = await apiClient.get(`/ingestion/runs/${runId}/logs`, {
+    params: { offset },
+  });
+  return response.data;
+};
+
 // =========================
 // Detection (expanded)
 // =========================

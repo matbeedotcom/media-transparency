@@ -258,3 +258,146 @@ async def resolution_stats(
         by_priority=stats.by_priority,
         by_strategy=stats.by_strategy,
     )
+
+
+# =========================
+# Cross-Border Resolution
+# =========================
+
+
+class CrossBorderRequest(BaseModel):
+    """Request for cross-border resolution."""
+
+    target_country: str = "CA"
+    limit: int = 100
+    auto_merge_threshold: float = 0.9
+    auto_merge: bool = True
+
+
+class CrossBorderResultResponse(BaseModel):
+    """Individual cross-border resolution result."""
+
+    recipient_id: str
+    recipient_name: str
+    recipient_city: str | None
+    recipient_state: str | None
+    recipient_country: str
+    matched_entity_id: str | None
+    matched_entity_name: str | None
+    matched_entity_bn: str | None
+    confidence: float
+    action: str
+
+
+class CrossBorderResponse(BaseModel):
+    """Response for cross-border resolution."""
+
+    status: str
+    target_country: str
+    total_unresolved: int
+    total_processed: int
+    auto_merged: int
+    queued_for_review: int
+    no_match: int
+    errors: int
+    results: list[CrossBorderResultResponse] = []
+
+
+@router.post("/cross-border")
+async def run_cross_border_resolution(
+    request: CrossBorderRequest,
+    user: OptionalUser = None,
+):
+    """Run cross-border entity resolution.
+
+    Links foreign grant recipients (from IRS 990 Schedule I) to known
+    entities in target countries (e.g., CRA charities in Canada).
+
+    Request body:
+    - target_country: Country code (default: CA)
+    - limit: Maximum grants to process (default: 100)
+    - auto_merge_threshold: Confidence threshold for auto-merge (default: 0.9)
+    - auto_merge: Whether to auto-merge (default: true)
+
+    Returns resolution statistics and list of results.
+    """
+    from ..resolution.cross_border import CrossBorderResolver
+
+    resolver = CrossBorderResolver(
+        auto_merge_threshold=request.auto_merge_threshold,
+    )
+
+    stats, results = await resolver.run(
+        target_country=request.target_country,
+        limit=request.limit,
+        auto_merge=request.auto_merge,
+    )
+
+    # Convert results to response format
+    result_responses = [
+        CrossBorderResultResponse(
+            recipient_id=str(r.grant.recipient_id),
+            recipient_name=r.grant.recipient_name,
+            recipient_city=r.grant.recipient_city,
+            recipient_state=r.grant.recipient_state,
+            recipient_country=r.grant.recipient_country,
+            matched_entity_id=str(r.matched_entity_id) if r.matched_entity_id else None,
+            matched_entity_name=r.matched_entity_name,
+            matched_entity_bn=r.matched_entity_bn,
+            confidence=r.confidence,
+            action=r.action,
+        )
+        for r in results
+    ]
+
+    return CrossBorderResponse(
+        status="completed",
+        target_country=request.target_country,
+        total_unresolved=stats.total_unresolved,
+        total_processed=stats.total_processed,
+        auto_merged=stats.auto_merged,
+        queued_for_review=stats.queued_for_review,
+        no_match=stats.no_match,
+        errors=stats.errors,
+        results=result_responses,
+    )
+
+
+@router.get("/cross-border/unresolved")
+async def get_unresolved_grants(
+    country: str = Query("CA", description="Target country code"),
+    limit: int = Query(50, ge=1, le=500),
+    user: OptionalUser = None,
+):
+    """Get list of unresolved foreign grants.
+
+    Returns grants that have recipients in the target country
+    but haven't been linked to known entities (no BN).
+    """
+    from ..resolution.cross_border import CrossBorderResolver
+
+    resolver = CrossBorderResolver()
+    grants = await resolver.find_unresolved_grants(
+        target_country=country,
+        limit=limit,
+    )
+
+    return {
+        "country": country,
+        "total": len(grants),
+        "grants": [
+            {
+                "recipient_id": str(g.recipient_id),
+                "recipient_name": g.recipient_name,
+                "recipient_city": g.recipient_city,
+                "recipient_state": g.recipient_state,
+                "recipient_postal": g.recipient_postal,
+                "recipient_country": g.recipient_country,
+                "funder_name": g.funder_name,
+                "funder_ein": g.funder_ein,
+                "amount": g.amount,
+                "fiscal_year": g.fiscal_year,
+            }
+            for g in grants
+        ],
+    }

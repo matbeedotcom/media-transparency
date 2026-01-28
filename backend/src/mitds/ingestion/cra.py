@@ -37,11 +37,12 @@ from .base import BaseIngester, IngestionConfig, with_retry, RetryConfig
 
 logger = get_context_logger(__name__)
 
-# CRA Open Data URLs
-CRA_CHARITIES_URL = "https://open.canada.ca/data/dataset/registered-charities"
-CRA_IDENTIFICATION_URL = "https://www.canada.ca/content/dam/cra-arc/formspubs/opendata/dsp-pds/identification_001.zip"
-CRA_FINANCIALS_URL = "https://www.canada.ca/content/dam/cra-arc/formspubs/opendata/dsp-pds/financials_001.zip"
-CRA_QUALIFIED_DONEES_URL = "https://www.canada.ca/content/dam/cra-arc/formspubs/opendata/dsp-pds/schedf_001.zip"
+# CRA Open Data URLs (2023 dataset from Open Government Portal)
+CRA_CHARITIES_URL = "https://open.canada.ca/data/en/dataset/05b3abd0-e70f-4b3b-a9c5-acc436bd15b6"
+CRA_IDENTIFICATION_URL = "https://open.canada.ca/data/dataset/05b3abd0-e70f-4b3b-a9c5-acc436bd15b6/resource/31a52caf-fa79-4ab3-bded-1ccc7b61c17f/download/ident_2023_update.csv"
+CRA_FINANCIALS_URL = "https://open.canada.ca/data/dataset/05b3abd0-e70f-4b3b-a9c5-acc436bd15b6/resource/0b9b4b01-5cb6-4981-b007-ae88f48cc799/download/financial_d_and_schedule_6_2023_updated.csv"
+CRA_QUALIFIED_DONEES_URL = "https://open.canada.ca/data/dataset/05b3abd0-e70f-4b3b-a9c5-acc436bd15b6/resource/c603fe1f-cc4c-480e-b1cd-7fd949c42487/download/qualified_donees_2023_updated.csv"
+CRA_DIRECTORS_URL = "https://open.canada.ca/data/dataset/05b3abd0-e70f-4b3b-a9c5-acc436bd15b6/resource/798a4a5f-f1ac-41a1-82d7-ef777f905bfe/download/directors_2023.csv"
 
 
 class CRACharity(BaseModel):
@@ -187,49 +188,78 @@ class CRAIngester(BaseIngester[CRACharity]):
     async def _download_and_extract(
         self, url: str, data_type: str
     ) -> list[dict[str, str]]:
-        """Download and extract CSV data from a ZIP file."""
+        """Download and parse CSV data (supports both direct CSV and ZIP files)."""
         async def _do_download():
             response = await self.http_client.get(url)
             response.raise_for_status()
             return response.content
 
         try:
-            zip_content = await with_retry(_do_download, logger=self.logger)
+            content = await with_retry(_do_download, logger=self.logger)
         except Exception as e:
             self.logger.error(f"Failed to download {data_type}: {e}")
             return []
 
-        # Store raw ZIP
+        # Determine file type from URL
+        is_csv = url.lower().endswith(".csv")
+        extension = "csv" if is_csv else "zip"
+
+        # Store raw file
         storage_key = generate_storage_key(
             "cra",
             f"{data_type}_{datetime.now().strftime('%Y%m%d')}",
-            extension="zip",
+            extension=extension,
         )
-        self.storage.upload_file(
-            zip_content,
+        await asyncio.to_thread(
+            self.storage.upload_file,
+            content,
             storage_key,
-            content_type="application/zip",
+            content_type="text/csv" if is_csv else "application/zip",
             metadata={"data_type": data_type},
         )
 
-        # Extract CSV from ZIP
+        # Parse CSV (from ZIP or direct)
         try:
-            with ZipFile(io.BytesIO(zip_content)) as zf:
-                csv_files = [n for n in zf.namelist() if n.endswith(".csv")]
-                if not csv_files:
-                    self.logger.warning(f"No CSV files found in {data_type} ZIP")
-                    return []
-
-                csv_content = zf.read(csv_files[0])
-
-                # Parse CSV
-                decoded = csv_content.decode("utf-8-sig")  # Handle BOM
-                reader = csv.DictReader(io.StringIO(decoded))
-                return list(reader)
-
+            if is_csv:
+                return await asyncio.to_thread(
+                    self._parse_csv_content, content, data_type
+                )
+            else:
+                return await asyncio.to_thread(
+                    self._extract_csv_from_zip, content, data_type
+                )
         except Exception as e:
-            self.logger.error(f"Failed to extract {data_type}: {e}")
+            self.logger.error(f"Failed to parse {data_type}: {e}")
             return []
+
+    def _parse_csv_content(
+        self, content: bytes, data_type: str
+    ) -> list[dict[str, str]]:
+        """Parse CSV content directly (sync, runs in thread)."""
+        decoded = content.decode("utf-8-sig")  # Handle BOM
+        reader = csv.DictReader(io.StringIO(decoded))
+        rows = list(reader)
+        self.logger.info(f"Parsed {len(rows)} rows from {data_type}")
+        return rows
+
+    def _extract_csv_from_zip(
+        self, zip_content: bytes, data_type: str
+    ) -> list[dict[str, str]]:
+        """Extract and parse CSV data from a ZIP file (sync, runs in thread)."""
+        with ZipFile(io.BytesIO(zip_content)) as zf:
+            csv_files = [n for n in zf.namelist() if n.endswith(".csv")]
+            if not csv_files:
+                self.logger.warning(f"No CSV files found in {data_type} ZIP")
+                return []
+
+            csv_content = zf.read(csv_files[0])
+
+            # Parse CSV
+            decoded = csv_content.decode("utf-8-sig")  # Handle BOM
+            reader = csv.DictReader(io.StringIO(decoded))
+            rows = list(reader)
+            self.logger.info(f"Parsed {len(rows)} rows from {data_type}")
+            return rows
 
     def _parse_charity(
         self,
@@ -471,6 +501,7 @@ class CRAIngester(BaseIngester[CRACharity]):
                 org_props["address_city"] = record.address.city
                 org_props["address_state"] = record.address.state
                 org_props["address_postal"] = record.address.postal_code
+                org_props["address_country"] = record.address.country
 
             if record.total_revenue is not None:
                 org_props["total_revenue"] = record.total_revenue
@@ -630,6 +661,7 @@ async def run_cra_ingestion(
     incremental: bool = True,
     limit: int | None = None,
     target_entities: list[str] | None = None,
+    run_id: UUID | None = None,
 ) -> dict[str, Any]:
     """Run CRA ingestion directly (not via Celery).
 
@@ -637,6 +669,7 @@ async def run_cra_ingestion(
         incremental: Whether to do incremental sync
         limit: Maximum number of records to process
         target_entities: Optional list of BNs to ingest specifically
+        run_id: Optional run ID from API layer
 
     Returns:
         Ingestion result dictionary
@@ -648,7 +681,7 @@ async def run_cra_ingestion(
             limit=limit,
             target_entities=target_entities,
         )
-        result = await ingester.run(config)
+        result = await ingester.run(config, run_id=run_id)
         return result.model_dump()
     finally:
         await ingester.close()

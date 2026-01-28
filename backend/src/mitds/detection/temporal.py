@@ -630,6 +630,9 @@ class TemporalCoordinationDetector:
                 time_range_end=datetime.utcnow(),
                 entity_count=0,
                 event_count=0,
+                coordination_score=0.0,
+                confidence=0.0,
+                is_coordinated=False,
                 explanation="No events to analyze",
             )
 

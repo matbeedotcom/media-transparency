@@ -81,6 +81,8 @@ def setup_logging() -> None:
     logging.getLogger("neo4j").setLevel(logging.WARNING)
     logging.getLogger("botocore").setLevel(logging.WARNING)
     logging.getLogger("boto3").setLevel(logging.WARNING)
+    logging.getLogger("pdfminer").setLevel(logging.WARNING)
+    logging.getLogger("pdfplumber").setLevel(logging.WARNING)
 
     # Log startup
     logger = get_logger(__name__)

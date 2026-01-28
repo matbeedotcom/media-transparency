@@ -265,6 +265,14 @@ class FuzzyMatcher(BaseMatcher):
                 "fuzzy_score": score,
             }
 
+            # Check country match (required for cross-border scenarios)
+            source_country = self._get_country(source)
+            target_country = self._get_country(candidate)
+            if source_country and target_country:
+                if source_country.upper() == target_country.upper():
+                    location_boost += 0.02
+                    match_details["country_match"] = True
+
             # Check city match
             source_city = self._get_city(source)
             target_city = self._get_city(candidate)
@@ -280,6 +288,15 @@ class FuzzyMatcher(BaseMatcher):
                 if source_state.upper() == target_state.upper():
                     location_boost += 0.05
                     match_details["state_match"] = True
+
+            # Check postal code match (strong geographic signal)
+            source_postal = self._get_postal(source)
+            target_postal = self._get_postal(candidate)
+            postal_boost = self._postal_match_boost(source_postal, target_postal)
+            if postal_boost > 0:
+                location_boost += postal_boost
+                match_details["postal_match"] = True
+                match_details["postal_boost"] = postal_boost
 
             # Calculate final confidence
             confidence = min(base_confidence + location_boost, 0.95)
@@ -331,6 +348,20 @@ class FuzzyMatcher(BaseMatcher):
             return address.get("state")
         return candidate.attributes.get("state")
 
+    def _get_country(self, candidate: MatchCandidate) -> str | None:
+        """Extract country from candidate attributes."""
+        address = candidate.attributes.get("address", {})
+        if isinstance(address, dict):
+            return address.get("country")
+        return candidate.attributes.get("country")
+
+    def _get_postal(self, candidate: MatchCandidate) -> str | None:
+        """Extract postal code from candidate attributes."""
+        address = candidate.attributes.get("address", {})
+        if isinstance(address, dict):
+            return address.get("postal_code")
+        return candidate.attributes.get("postal") or candidate.attributes.get("postal_code")
+
     def _cities_match(self, city1: str, city2: str) -> bool:
         """Check if two cities match (fuzzy)."""
         c1 = re.sub(r"[^A-Z]", "", city1.upper())
@@ -342,6 +373,38 @@ class FuzzyMatcher(BaseMatcher):
         # Allow fuzzy match for minor typos
         score = fuzz.ratio(c1, c2)
         return score >= 90
+
+    def _postal_match_boost(self, postal1: str | None, postal2: str | None) -> float:
+        """Calculate confidence boost for postal code matching.
+
+        For Canadian postal codes: First 3 chars = Forward Sortation Area (FSA)
+        For US ZIP codes: First 3 digits = sectional center
+        Matching these is a strong geographic signal.
+
+        Args:
+            postal1: First postal code
+            postal2: Second postal code
+
+        Returns:
+            Confidence boost (0.0 to 0.1)
+        """
+        if not postal1 or not postal2:
+            return 0.0
+
+        # Normalize: uppercase, remove spaces and hyphens
+        p1 = postal1.upper().replace(" ", "").replace("-", "")
+        p2 = postal2.upper().replace(" ", "").replace("-", "")
+
+        # Full match
+        if p1 == p2:
+            return 0.1
+
+        # Prefix match (FSA for Canada, sectional center for US)
+        if len(p1) >= 3 and len(p2) >= 3:
+            if p1[:3] == p2[:3]:
+                return 0.05
+
+        return 0.0
 
 
 class EmbeddingMatcher(BaseMatcher):

@@ -33,6 +33,14 @@ FOR (s:Sponsor) REQUIRE s.id IS UNIQUE;
 CREATE CONSTRAINT vendor_id IF NOT EXISTS
 FOR (v:Vendor) REQUIRE v.id IS UNIQUE;
 
+// Election nodes
+CREATE CONSTRAINT election_id IF NOT EXISTS
+FOR (e:Election) REQUIRE e.election_id IS UNIQUE;
+
+// MediaType nodes
+CREATE CONSTRAINT media_type_name IF NOT EXISTS
+FOR (m:MediaType) REQUIRE m.name IS UNIQUE;
+
 // =========================
 // Business Key Indexes
 // =========================
@@ -127,7 +135,62 @@ FOR (p:Person) ON (p.sec_cik);
 
 // Canada Corporation number lookup
 CREATE INDEX org_canada_corp IF NOT EXISTS
-FOR (o:Organization) ON (o.canada_corp_number);
+FOR (o:Organization) ON (o.canada_corp_num);
+
+// Lobbying registration lookup
+CREATE INDEX org_lobbying_reg IF NOT EXISTS
+FOR (o:Organization) ON (o.lobbying_registration);
+
+// Person lobbyist type lookup
+CREATE INDEX person_lobbyist_type IF NOT EXISTS
+FOR (p:Person) ON (p.lobbyist_type);
+
+// Government organization flag
+CREATE INDEX org_is_government IF NOT EXISTS
+FOR (o:Organization) ON (o.is_government);
+
+// LOBBIES_FOR relationship index
+CREATE INDEX rel_lobbies_for_temporal IF NOT EXISTS
+FOR ()-[r:LOBBIES_FOR]-() ON (r.valid_from, r.valid_to);
+
+// LOBBIED relationship index
+CREATE INDEX rel_lobbied_registration IF NOT EXISTS
+FOR ()-[r:LOBBIED]-() ON (r.registration_id);
+
+// =========================
+// Elections Canada Indexes
+// =========================
+
+// Election third party flag
+CREATE INDEX org_is_election_third_party IF NOT EXISTS
+FOR (o:Organization) ON (o.is_election_third_party);
+
+// Election date index
+CREATE INDEX election_date IF NOT EXISTS
+FOR (e:Election) ON (e.election_date);
+
+// Election jurisdiction
+CREATE INDEX election_jurisdiction IF NOT EXISTS
+FOR (e:Election) ON (e.jurisdiction);
+
+// REGISTERED_FOR relationship (org -> election)
+CREATE INDEX rel_registered_for_election IF NOT EXISTS
+FOR ()-[r:REGISTERED_FOR]-() ON (r.registered_date);
+
+// ADVERTISED_ON relationship (org -> media type)
+CREATE INDEX rel_advertised_on_amount IF NOT EXISTS
+FOR ()-[r:ADVERTISED_ON]-() ON (r.amount);
+
+CREATE INDEX rel_advertised_on_election IF NOT EXISTS
+FOR ()-[r:ADVERTISED_ON]-() ON (r.election_id);
+
+// FINANCIAL_AGENT_FOR relationship
+CREATE INDEX rel_financial_agent_election IF NOT EXISTS
+FOR ()-[r:FINANCIAL_AGENT_FOR]-() ON (r.election_id);
+
+// AUDITED_BY relationship
+CREATE INDEX rel_audited_by_election IF NOT EXISTS
+FOR ()-[r:AUDITED_BY]-() ON (r.election_id);
 
 // =========================
 // Full-text search indexes
@@ -135,7 +198,7 @@ FOR (o:Organization) ON (o.canada_corp_number);
 
 // Full-text index for entity name search
 CREATE FULLTEXT INDEX entity_name_search IF NOT EXISTS
-FOR (n:Person|Organization|Outlet|Sponsor)
+FOR (n:Person|Organization|Outlet|Sponsor|Election)
 ON EACH [n.name];
 
 // =========================
