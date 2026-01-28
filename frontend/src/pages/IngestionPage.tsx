@@ -12,11 +12,9 @@ import {
   searchIngestionSources,
   triggerIngestion,
   getIngestionRuns,
-  getIngestionRun,
   listJobs,
   cancelJob,
   getJobResult,
-  type IngestionStatus,
   type CompanySearchResult,
   type JobStatusFull,
   type IngestionRun,
@@ -135,12 +133,6 @@ export default function IngestionPage() {
       limit: 25,
     }),
     enabled: activeTab === 'history',
-  });
-
-  const { data: runDetailData } = useQuery({
-    queryKey: ['ingestion-run', expandedRunId],
-    queryFn: () => getIngestionRun(expandedRunId!),
-    enabled: !!expandedRunId,
   });
 
   // ========================
