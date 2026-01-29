@@ -275,13 +275,18 @@ class MetaAdIngester(BaseIngester[MetaAdRecord]):
         access_token = await self.get_access_token()
 
         # Determine date range
+        # Note: Meta API rejects future dates, so we cap end_date at yesterday to be timezone-safe
         if config.date_from:
             start_date = config.date_from
         else:
             # Default to last 7 days for incremental
             start_date = datetime.utcnow() - timedelta(days=7)
 
-        end_date = config.date_to or datetime.utcnow()
+        # Use yesterday as max date to avoid timezone issues with Meta's servers
+        yesterday = datetime.utcnow() - timedelta(days=1)
+        end_date = config.date_to if config.date_to else yesterday
+        if end_date > yesterday:
+            end_date = yesterday
 
         # Build search parameters
         countries = config.extra_params.get("countries", SUPPORTED_COUNTRIES)
@@ -331,9 +336,8 @@ class MetaAdIngester(BaseIngester[MetaAdRecord]):
 
         params = {
             "access_token": access_token,
-            # Meta API expects array format like ['US'] with single quotes inside
-            # Using Python list repr gives us this format
-            "ad_reached_countries": f"['{country}']",
+            # Meta API expects JSON array format: ["US"]
+            "ad_reached_countries": json.dumps([country]),
             "ad_type": "POLITICAL_AND_ISSUE_ADS",
             "ad_active_status": "ALL",
             "fields": ",".join(fields),
@@ -342,9 +346,8 @@ class MetaAdIngester(BaseIngester[MetaAdRecord]):
 
         # Meta Ad Library API requires EITHER search_terms OR search_page_ids
         # Cannot query all ads without search criteria
-        # Note: Meta's API expects search_terms with single quotes: 'california'
         if search_terms:
-            params["search_terms"] = f"'{search_terms[0]}'"  # API expects single quotes
+            params["search_terms"] = search_terms[0]  # No quotes needed
         elif page_ids:
             # search_page_ids expects comma-separated list of IDs
             params["search_page_ids"] = ",".join(page_ids)
@@ -653,41 +656,10 @@ class MetaAdIngester(BaseIngester[MetaAdRecord]):
                     now=datetime.utcnow().isoformat(),
                 )
 
-        # Store demographic and regional data in PostgreSQL for analysis
-        async with get_db_session() as db:
-            from sqlalchemy import text
-
-            # Store as an event for temporal analysis
-            event_query = text("""
-                INSERT INTO events (
-                    id, event_type, entity_id, event_time, metadata
-                )
-                VALUES (
-                    :id, 'AD_DELIVERY', :entity_id, :event_time, :metadata
-                )
-                ON CONFLICT (id) DO UPDATE SET
-                    metadata = :metadata
-            """)
-
-            await db.execute(
-                event_query,
-                {
-                    "id": record.ad_id,
-                    "entity_id": record.page_id or record.ad_id,
-                    "event_time": record.ad_delivery_start_time or record.ad_creation_time,
-                    "metadata": {
-                        "spend_lower": record.spend_lower,
-                        "spend_upper": record.spend_upper,
-                        "impressions_lower": record.impressions_lower,
-                        "impressions_upper": record.impressions_upper,
-                        "delivery_by_region": record.delivery_by_region,
-                        "demographic_distribution": record.demographic_distribution,
-                        "country": record.country,
-                        "funding_entity": record.funding_entity,
-                    },
-                },
-            )
-            await db.commit()
+        # Note: PostgreSQL events storage skipped - the events table schema requires
+        # evidence_ref FK and uses different column names (entity_ids array, occurred_at, properties).
+        # The Neo4j graph is the primary storage for influence detection.
+        # TODO: Implement proper events storage with evidence creation if needed for temporal analysis.
 
         return result
 

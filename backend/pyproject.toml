@@ -61,6 +61,9 @@ dependencies = [
     "lxml>=5.1.0",
     "defusedxml>=0.7.1",
 
+    # PDF Processing (SEDAR+)
+    "pdfplumber>=0.10.0",
+
     # Fuzzy Matching
     "rapidfuzz>=3.6.0",
 

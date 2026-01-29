@@ -127,7 +127,7 @@ async def get_ingestion_status(
         sources_status = []
 
         # Sources that are enabled (free, no API key required)
-        enabled_sources = ["irs990", "cra", "sec_edgar", "canada_corps"]
+        enabled_sources = ["irs990", "cra", "sec_edgar", "canada_corps", "sedar"]
         # Sources that require API keys
         disabled_sources = ["opencorporates", "meta_ads"]
 
@@ -384,6 +384,7 @@ async def _run_ingestion_task(
             result = await run_sec_edgar_ingestion(
                 limit=request.limit,
                 target_entities=request.target_entities,
+                flag_canadian=True,  # Always flag Canadian companies
                 run_id=run_id,
             )
         elif source == "canada_corps":
@@ -398,6 +399,14 @@ async def _run_ingestion_task(
                 days_back=7,
                 incremental=request.incremental,
                 limit=request.limit,
+            )
+        elif source == "sedar":
+            from ..ingestion.sedar import run_sedar_ingestion
+            result = await run_sedar_ingestion(
+                incremental=request.incremental,
+                limit=request.limit,
+                target_entities=request.target_entities,
+                run_id=run_id,
             )
         else:
             # Not implemented yet
@@ -484,7 +493,7 @@ async def trigger_ingestion(
     Returns:
         Job ID and status URL for tracking
     """
-    valid_sources = ["irs990", "cra", "sec_edgar", "canada_corps", "opencorporates", "meta_ads"]
+    valid_sources = ["irs990", "cra", "sec_edgar", "canada_corps", "sedar", "opencorporates", "meta_ads"]
 
     if source not in valid_sources:
         raise ValidationError(

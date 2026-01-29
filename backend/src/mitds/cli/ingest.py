@@ -302,6 +302,12 @@ def ingest_opencorporates(
     help="Maximum number of companies to process",
 )
 @click.option(
+    "--target",
+    type=str,
+    default=None,
+    help="Comma-separated list of CIKs to target",
+)
+@click.option(
     "--with-ownership/--no-ownership",
     default=True,
     help="Parse 13D/13G ownership filings (default: enabled)",
@@ -312,6 +318,11 @@ def ingest_opencorporates(
     help="Parse Form 4 insider transaction filings (default: enabled)",
 )
 @click.option(
+    "--flag-canadian/--no-flag-canadian",
+    default=True,
+    help="Detect and flag Canadian companies in ownership filings (default: enabled)",
+)
+@click.option(
     "--verbose",
     "-v",
     is_flag=True,
@@ -320,8 +331,10 @@ def ingest_opencorporates(
 def ingest_sec_edgar(
     incremental: bool,
     limit: int | None,
+    target: str | None,
     with_ownership: bool,
     with_insiders: bool,
+    flag_canadian: bool,
     verbose: bool,
 ):
     """Ingest SEC EDGAR company filings.
@@ -331,6 +344,9 @@ def ingest_sec_edgar(
     Automatically creates Neo4j graph nodes and OWNS relationships
     from SC 13D/13G beneficial ownership filings, and DIRECTOR_OF /
     EMPLOYED_BY relationships from Form 4 insider filings.
+
+    With --flag-canadian (default), detects Canadian companies in 13D/13G
+    filings and flags them with jurisdiction: CA in the graph.
 
     Free API - no key required.
 
@@ -342,20 +358,33 @@ def ingest_sec_edgar(
         # Test with limited records
         mitds ingest sec-edgar --limit 100 --verbose
 
+        # Target specific CIKs (e.g., Chatham Asset Management)
+        mitds ingest sec-edgar --target 0001633336 --limit 5 -v
+
         # Skip ownership parsing for faster ingestion
         mitds ingest sec-edgar --no-ownership --limit 50
 
         # Skip insider parsing
         mitds ingest sec-edgar --no-insiders --limit 50
+
+        # Disable Canadian detection
+        mitds ingest sec-edgar --no-flag-canadian --limit 50
     """
     from ..ingestion.edgar import run_sec_edgar_ingestion
 
     click.echo("Starting SEC EDGAR ingestion...")
 
+    target_entities = None
+    if target:
+        target_entities = [t.strip() for t in target.split(",")]
+
     if verbose:
         click.echo(f"  Mode: {'incremental' if incremental else 'full'}")
         click.echo(f"  Ownership parsing: {'enabled' if with_ownership else 'disabled'}")
         click.echo(f"  Insider parsing: {'enabled' if with_insiders else 'disabled'}")
+        click.echo(f"  Canadian detection: {'enabled' if flag_canadian else 'disabled'}")
+        if target_entities:
+            click.echo(f"  Target CIKs: {target_entities}")
         if limit:
             click.echo(f"  Limit: {limit} companies")
 
@@ -366,8 +395,168 @@ def ingest_sec_edgar(
             run_sec_edgar_ingestion(
                 incremental=incremental,
                 limit=limit,
+                target_entities=target_entities,
                 parse_ownership=with_ownership,
                 parse_insiders=with_insiders,
+                flag_canadian=flag_canadian,
+            )
+        )
+
+        duration = (datetime.now() - start_time).total_seconds()
+
+        _print_result(result, duration, verbose)
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        if verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
+@cli.command(name="sedar")
+@click.option(
+    "--incremental/--full",
+    default=True,
+    help="Incremental or full sync (default: incremental)",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum number of filings to process",
+)
+@click.option(
+    "--target",
+    type=str,
+    default=None,
+    help="Comma-separated list of company names, SEDAR profiles, or document URLs",
+)
+@click.option(
+    "--csv-path",
+    type=str,
+    default=None,
+    help="Path to CSV export from SEDAR+ web interface",
+)
+@click.option(
+    "--from-date",
+    type=str,
+    default=None,
+    help="Start date for filing search (YYYY-MM-DD)",
+)
+@click.option(
+    "--to-date",
+    type=str,
+    default=None,
+    help="End date for filing search (YYYY-MM-DD)",
+)
+@click.option(
+    "--doc-types",
+    type=str,
+    default=None,
+    help="Comma-separated document types: early_warning, alternative_monthly",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Enable verbose output",
+)
+def ingest_sedar(
+    incremental: bool,
+    limit: int | None,
+    target: str | None,
+    csv_path: str | None,
+    from_date: str | None,
+    to_date: str | None,
+    doc_types: str | None,
+    verbose: bool,
+):
+    """Ingest SEDAR+ Canadian securities filings.
+
+    Downloads and processes Early Warning Reports and Alternative Monthly
+    Reports from SEDAR+ to track Canadian corporate ownership.
+
+    Creates:
+    - Organization nodes for Canadian acquirers and issuers
+    - OWNS relationships with ownership percentage and filing details
+
+    Note: SEDAR+ does not have a public API. Ingestion modes:
+    1. --target: Process specific document URLs
+    2. --csv-path: Process exported CSV from SEDAR+ web interface
+    3. Manual: Visit sedarplus.ca, search, export, then use --csv-path
+
+    Free data - no key required.
+
+    Examples:
+
+        # Process a specific SEDAR+ document URL
+        mitds ingest sedar --target "https://www.sedarplus.ca/csa-party/records/document.html?id=..."
+
+        # Process CSV export from SEDAR+ web search
+        mitds ingest sedar --csv-path /path/to/sedar_export.csv
+
+        # Target multiple companies (for manual lookup guidance)
+        mitds ingest sedar --target "Postmedia Network,Corus Entertainment" -v
+
+        # Limit processing
+        mitds ingest sedar --csv-path export.csv --limit 50 --verbose
+    """
+    from ..ingestion.sedar import run_sedar_ingestion
+
+    click.echo("Starting SEDAR+ ingestion...")
+
+    target_entities = None
+    if target:
+        target_entities = [t.strip() for t in target.split(",")]
+
+    document_types = None
+    if doc_types:
+        document_types = [t.strip() for t in doc_types.split(",")]
+
+    # Parse dates
+    date_from = None
+    date_to = None
+    if from_date:
+        try:
+            date_from = datetime.strptime(from_date, "%Y-%m-%d").date()
+        except ValueError:
+            click.echo(f"Invalid from-date format: {from_date}. Use YYYY-MM-DD", err=True)
+            sys.exit(1)
+    if to_date:
+        try:
+            date_to = datetime.strptime(to_date, "%Y-%m-%d").date()
+        except ValueError:
+            click.echo(f"Invalid to-date format: {to_date}. Use YYYY-MM-DD", err=True)
+            sys.exit(1)
+
+    if verbose:
+        click.echo(f"  Mode: {'incremental' if incremental else 'full'}")
+        if target_entities:
+            click.echo(f"  Targets: {target_entities}")
+        if csv_path:
+            click.echo(f"  CSV path: {csv_path}")
+        if date_from:
+            click.echo(f"  From date: {date_from}")
+        if date_to:
+            click.echo(f"  To date: {date_to}")
+        if document_types:
+            click.echo(f"  Document types: {document_types}")
+        if limit:
+            click.echo(f"  Limit: {limit} filings")
+
+    start_time = datetime.now()
+
+    try:
+        result = asyncio.run(
+            run_sedar_ingestion(
+                incremental=incremental,
+                limit=limit,
+                target_entities=target_entities,
+                csv_path=csv_path,
+                document_types=document_types,
+                date_from=date_from,
+                date_to=date_to,
             )
         )
 
@@ -977,7 +1166,7 @@ def ingestion_status():
         click.echo("\nIngestion Pipeline Status")
         click.echo("=" * 60)
 
-        sources = ["irs990", "cra", "sec_edgar", "canada_corps", "opencorporates", "meta_ads", "lobbying", "elections_canada", "littlesis"]
+        sources = ["irs990", "cra", "sec_edgar", "canada_corps", "sedar", "opencorporates", "meta_ads", "lobbying", "elections_canada", "littlesis"]
         run_by_source = {r.source: r for r in runs}
 
         for source in sources:

@@ -268,6 +268,7 @@ export default function EntityExplorer() {
               <option value="PERSON">Persons</option>
               <option value="OUTLET">Outlets</option>
               <option value="SPONSOR">Sponsors</option>
+              <option value="AD">Ads</option>
             </select>
           </div>
         </form>

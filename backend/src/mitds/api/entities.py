@@ -95,12 +95,14 @@ async def search_entities(
             # Search with text matching
             search_query = f"""
             MATCH (e)
-            WHERE (e:Organization OR e:Person OR e:Outlet OR e:Sponsor)
+            WHERE (e:Organization OR e:Person OR e:Outlet OR e:Sponsor OR e:Ad)
             AND (
                 toLower(e.name) CONTAINS toLower($search_term)
+                OR toLower(e.page_name) CONTAINS toLower($search_term)
                 OR any(alias IN coalesce(e.aliases, []) WHERE toLower(alias) CONTAINS toLower($search_term))
                 OR e.ein = $search_term
                 OR e.bn = $search_term
+                OR e.meta_ad_id = $search_term
             )
             {type_filter}
             {jurisdiction_filter}
@@ -112,12 +114,14 @@ async def search_entities(
 
             count_query = f"""
             MATCH (e)
-            WHERE (e:Organization OR e:Person OR e:Outlet OR e:Sponsor)
+            WHERE (e:Organization OR e:Person OR e:Outlet OR e:Sponsor OR e:Ad)
             AND (
                 toLower(e.name) CONTAINS toLower($search_term)
+                OR toLower(e.page_name) CONTAINS toLower($search_term)
                 OR any(alias IN coalesce(e.aliases, []) WHERE toLower(alias) CONTAINS toLower($search_term))
                 OR e.ein = $search_term
                 OR e.bn = $search_term
+                OR e.meta_ad_id = $search_term
             )
             {type_filter}
             {jurisdiction_filter}
@@ -132,7 +136,7 @@ async def search_entities(
             # List all entities
             list_query = f"""
             MATCH (e)
-            WHERE (e:Organization OR e:Person OR e:Outlet OR e:Sponsor)
+            WHERE (e:Organization OR e:Person OR e:Outlet OR e:Sponsor OR e:Ad)
             {type_filter.replace('AND', 'AND' if type_filter else '')}
             {jurisdiction_filter.replace('AND', 'AND' if jurisdiction_filter else '')}
             RETURN e
@@ -143,7 +147,7 @@ async def search_entities(
 
             count_query = f"""
             MATCH (e)
-            WHERE (e:Organization OR e:Person OR e:Outlet OR e:Sponsor)
+            WHERE (e:Organization OR e:Person OR e:Outlet OR e:Sponsor OR e:Ad)
             {type_filter.replace('AND', 'AND' if type_filter else '')}
             {jurisdiction_filter.replace('AND', 'AND' if jurisdiction_filter else '')}
             RETURN count(e) as total
@@ -166,10 +170,13 @@ async def search_entities(
             elif hasattr(created_at, 'isoformat'):
                 created_at = created_at.isoformat()
 
+            # Handle Ad nodes which use page_name instead of name
+            name = entity_data.get("name") or entity_data.get("page_name") or f"Ad {entity_data.get('meta_ad_id', 'Unknown')}"
+
             entities.append({
                 "id": entity_data.get("id"),
                 "entity_type": entity_data.get("entity_type"),
-                "name": entity_data.get("name"),
+                "name": name,
                 "confidence": entity_data.get("confidence", 1.0),
                 "created_at": created_at,
             })
@@ -225,7 +232,7 @@ async def get_entity(
 
         # Extract known fields
         known_fields = {
-            "id", "entity_type", "name", "confidence", "created_at",
+            "id", "entity_type", "name", "page_name", "confidence", "created_at",
             "updated_at", "aliases"
         }
         properties = {
@@ -233,10 +240,13 @@ async def get_entity(
             if k not in known_fields and v is not None
         }
 
+        # Handle Ad nodes which use page_name instead of name
+        name = entity_data.get("name") or entity_data.get("page_name") or "Unknown"
+
         return EntityResponse(
             id=UUID(entity_data["id"]),
             entity_type=entity_data.get("entity_type", "UNKNOWN"),
-            name=entity_data.get("name", "Unknown"),
+            name=name,
             confidence=entity_data.get("confidence", 1.0),
             created_at=created_at,
             updated_at=updated_at,

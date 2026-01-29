@@ -39,7 +39,8 @@ and temporal coordination.
 ### Data Ingestion
 - IRS 990 filings (US nonprofits)
 - CRA T3010 filings (Canadian charities)
-- SEC EDGAR company filings
+- SEC EDGAR company filings (with Canadian jurisdiction detection)
+- SEDAR+ Canadian securities filings (Early Warning Reports for 10%+ ownership)
 - Canada Corporations registry
 
 ## Authentication

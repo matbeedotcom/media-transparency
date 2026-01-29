@@ -50,6 +50,44 @@ EDGAR_COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 # Format: Sample Company Name AdminContact@<sample company domain>.com
 USER_AGENT = "MITDS Research contact@mitds.org"
 
+# Canadian jurisdiction codes used in SEC EDGAR state_of_incorporation field
+# Maps SEC codes to province/territory names for detection of Canadian companies
+# NOTE: "CA" is NOT included because SEC EDGAR uses "CA" for California (US state)
+# Canadian companies use A0-A9 (provinces) or B0-B2 (territories) codes
+CANADIAN_JURISDICTIONS: dict[str, str] = {
+    # Provinces
+    "A0": "Alberta",
+    "A1": "British Columbia",
+    "A2": "Manitoba",
+    "A3": "New Brunswick",
+    "A4": "Newfoundland and Labrador",
+    "A5": "Nova Scotia",
+    "A6": "Ontario",
+    "A7": "Prince Edward Island",
+    "A8": "Quebec",
+    "A9": "Saskatchewan",
+    # Territories
+    "B0": "Northwest Territories",
+    "B1": "Nunavut",
+    "B2": "Yukon",
+    # Generic Canada designation (rare, used when province not specified)
+    "CANADA": "Canada (unspecified province)",
+}
+
+
+def is_canadian_jurisdiction(state_of_inc: str | None) -> bool:
+    """Check if a state of incorporation code indicates a Canadian entity.
+
+    Args:
+        state_of_inc: The state/province of incorporation code from SEC EDGAR
+
+    Returns:
+        True if the code indicates a Canadian jurisdiction
+    """
+    if not state_of_inc:
+        return False
+    return state_of_inc.upper() in CANADIAN_JURISDICTIONS
+
 
 class EDGARCompany(BaseModel):
     """Parsed SEC EDGAR company record."""
@@ -75,6 +113,9 @@ class EDGARCompany(BaseModel):
     # Filing metadata
     filings_count: int = 0
     latest_filing_date: date | None = None
+
+    # Canadian jurisdiction detection
+    is_canadian: bool = Field(default=False, description="True if company is incorporated in Canada")
 
     # Raw submissions data for downstream 13D/13G parsing (transient, not serialized)
     raw_submissions: dict[str, Any] | None = Field(
@@ -122,6 +163,10 @@ class EDGAROwnershipFiling(BaseModel):
     filer_name: str = Field(..., description="Name of the beneficial owner")
     subject_cik: str = Field(..., description="CIK of the company whose shares are owned")
     subject_name: str = Field(..., description="Name of the subject company")
+
+    # Canadian jurisdiction detection for subject company
+    subject_is_canadian: bool = Field(default=False, description="True if subject company is Canadian")
+    subject_jurisdiction: str | None = Field(default=None, description="Jurisdiction code of subject company")
 
     # Filing metadata
     accession_number: str
@@ -297,13 +342,17 @@ class SECEDGARIngester(BaseIngester[EDGARCompany]):
             except (ValueError, IndexError):
                 pass
 
+        # Detect Canadian jurisdiction
+        state_of_inc = data.get("stateOfIncorporation")
+        company_is_canadian = is_canadian_jurisdiction(state_of_inc)
+
         return EDGARCompany(
             cik=str(data.get("cik", "")).zfill(10),
             name=data.get("name", "Unknown"),
             sic=data.get("sic"),
             sic_description=data.get("sicDescription"),
             ein=data.get("ein"),
-            state_of_incorporation=data.get("stateOfIncorporation"),
+            state_of_incorporation=state_of_inc,
             fiscal_year_end=data.get("fiscalYearEnd"),
             business_address=business_addr,
             mailing_address=mailing_addr,
@@ -311,6 +360,7 @@ class SECEDGARIngester(BaseIngester[EDGARCompany]):
             tickers=tickers or data.get("tickers", []),
             filings_count=filings_count,
             latest_filing_date=latest_filing,
+            is_canadian=company_is_canadian,
         )
 
     def parse_filings(self, data: dict[str, Any], limit: int | None = None) -> list[EDGARFiling]:
@@ -409,6 +459,7 @@ class SECEDGARIngester(BaseIngester[EDGARCompany]):
         filing: EDGARFiling,
         company_cik: str,
         company_name: str,
+        flag_canadian: bool = True,
     ) -> EDGAROwnershipFiling | None:
         """Parse ownership info from a 13D/13G filing index page.
 
@@ -423,6 +474,7 @@ class SECEDGARIngester(BaseIngester[EDGARCompany]):
             filing: The ownership filing to parse
             company_cik: CIK of the company we're processing
             company_name: Name of the company we're processing
+            flag_canadian: Whether to lookup and flag Canadian subject companies
 
         Returns:
             Parsed ownership filing or None if parsing fails
@@ -450,11 +502,31 @@ class SECEDGARIngester(BaseIngester[EDGARCompany]):
         if subject_cik == filer_cik:
             return None
 
+        # Detect Canadian jurisdiction for subject company
+        subject_is_canadian = False
+        subject_jurisdiction = None
+        if flag_canadian:
+            try:
+                subject_data = await self.fetch_company_submissions(subject_cik.zfill(10))
+                if subject_data:
+                    state_of_inc = subject_data.get("stateOfIncorporation")
+                    subject_is_canadian = is_canadian_jurisdiction(state_of_inc)
+                    subject_jurisdiction = state_of_inc
+                    if subject_is_canadian:
+                        self.logger.info(
+                            f"Canadian company detected: {subject_name} "
+                            f"(jurisdiction: {state_of_inc})"
+                        )
+            except Exception as e:
+                self.logger.debug(f"Could not fetch subject company data: {e}")
+
         return EDGAROwnershipFiling(
             filer_cik=filer_cik.zfill(10),
             filer_name=filer_name,
             subject_cik=subject_cik.zfill(10),
             subject_name=subject_name,
+            subject_is_canadian=subject_is_canadian,
+            subject_jurisdiction=subject_jurisdiction,
             accession_number=filing.accession_number,
             form_type=filing.form_type,
             filing_date=filing.filing_date,
@@ -873,13 +945,19 @@ class SECEDGARIngester(BaseIngester[EDGARCompany]):
             async with get_neo4j_session() as session:
                 now = datetime.utcnow().isoformat()
 
+                # Determine jurisdiction - use "CA" for Canadian companies
+                jurisdiction = record.state_of_incorporation or "US"
+                if record.is_canadian:
+                    jurisdiction = "CA"
+
                 org_props = {
                     "id": result["entity_id"],
                     "name": record.name,
                     "entity_type": "ORGANIZATION",
                     "org_type": "corporation",
                     "status": "active",
-                    "jurisdiction": record.state_of_incorporation or "US",
+                    "jurisdiction": jurisdiction,
+                    "is_canadian": record.is_canadian,
                     "sec_cik": record.cik,
                     "confidence": 0.95,
                     "updated_at": now,
@@ -943,10 +1021,14 @@ class SECEDGARIngester(BaseIngester[EDGARCompany]):
                     break
                 unique_filings.append(filing)
 
+            # Track Canadian organizations found
+            canadian_orgs_found = 0
+            flag_canadian = getattr(self, "_flag_canadian", True)
+
             for filing in unique_filings:
                 try:
                     ownership = await self.parse_ownership_from_index(
-                        filing, record.cik, record.name
+                        filing, record.cik, record.name, flag_canadian=flag_canadian
                     )
                     if not ownership:
                         continue
@@ -955,6 +1037,10 @@ class SECEDGARIngester(BaseIngester[EDGARCompany]):
                     if ownership.subject_cik in seen_subjects:
                         continue
                     seen_subjects.add(ownership.subject_cik)
+
+                    # Track Canadian orgs
+                    if ownership.subject_is_canadian:
+                        canadian_orgs_found += 1
 
                     # Rate limiting for additional API calls
                     await asyncio.sleep(0.15)
@@ -965,6 +1051,11 @@ class SECEDGARIngester(BaseIngester[EDGARCompany]):
                         async with get_neo4j_session() as session:
                             now = datetime.utcnow().isoformat()
 
+                            # Determine jurisdiction for subject company
+                            subject_jurisdiction = ownership.subject_jurisdiction or "US"
+                            if ownership.subject_is_canadian:
+                                subject_jurisdiction = "CA"
+
                             # Ensure subject company node exists
                             subject_props = {
                                 "id": str(uuid4()),
@@ -972,6 +1063,8 @@ class SECEDGARIngester(BaseIngester[EDGARCompany]):
                                 "entity_type": "ORGANIZATION",
                                 "org_type": "corporation",
                                 "status": "active",
+                                "jurisdiction": subject_jurisdiction,
+                                "is_canadian": ownership.subject_is_canadian,
                                 "sec_cik": ownership.subject_cik,
                                 "confidence": 0.8,
                                 "updated_at": now,
@@ -988,12 +1081,14 @@ class SECEDGARIngester(BaseIngester[EDGARCompany]):
                                 """
                                 MERGE (o:Organization {sec_cik: $cik})
                                 ON CREATE SET o += $props
-                                ON MATCH SET o.updated_at = $now
+                                ON MATCH SET o.updated_at = $now, o.jurisdiction = $jurisdiction, o.is_canadian = $is_canadian
                                 RETURN o.id as id
                                 """,
                                 cik=ownership.subject_cik,
                                 props=subject_props,
                                 now=now,
+                                jurisdiction=subject_jurisdiction,
+                                is_canadian=ownership.subject_is_canadian,
                             )
 
                             # Ensure filer node exists (may differ from current company)
@@ -1030,6 +1125,7 @@ class SECEDGARIngester(BaseIngester[EDGARCompany]):
                             # Create OWNS relationship: filer -> subject
                             owns_props = {
                                 "id": str(uuid4()),
+                                "source": "sec_edgar",
                                 "confidence": 0.85,
                                 "filing_accession": ownership.accession_number,
                                 "form_type": ownership.form_type,
@@ -1056,8 +1152,10 @@ class SECEDGARIngester(BaseIngester[EDGARCompany]):
                                 props=owns_props,
                             )
 
+                            # Log with Canadian indicator
+                            canadian_marker = " [CANADIAN]" if ownership.subject_is_canadian else ""
                             self.logger.info(
-                                f"OWNS: {ownership.filer_name} -> {ownership.subject_name} "
+                                f"OWNS: {ownership.filer_name} -> {ownership.subject_name}{canadian_marker} "
                                 f"(filing: {ownership.form_type} {ownership.filing_date})"
                             )
 
@@ -1203,6 +1301,7 @@ async def run_sec_edgar_ingestion(
     incremental: bool = True,
     parse_ownership: bool = True,
     parse_insiders: bool = True,
+    flag_canadian: bool = True,
     target_entities: list[str] | None = None,
     run_id: UUID | None = None,
 ) -> dict[str, Any]:
@@ -1213,6 +1312,7 @@ async def run_sec_edgar_ingestion(
         incremental: Whether to do incremental sync
         parse_ownership: Whether to parse 13D/13G ownership filings
         parse_insiders: Whether to parse Form 4 insider transaction filings
+        flag_canadian: Whether to detect and flag Canadian companies
         target_entities: Optional list of CIKs to ingest specifically
         run_id: Optional run ID from API layer
 
@@ -1222,6 +1322,7 @@ async def run_sec_edgar_ingestion(
     ingester = SECEDGARIngester()
     ingester._parse_ownership = parse_ownership
     ingester._parse_insiders = parse_insiders
+    ingester._flag_canadian = flag_canadian
 
     try:
         config = IngestionConfig(

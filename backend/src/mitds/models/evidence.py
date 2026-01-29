@@ -18,6 +18,7 @@ class EvidenceType(str, Enum):
     CRA_T3010 = "cra_t3010"
     OPENCORP_RECORD = "opencorp_record"
     SEC_EDGAR_FILING = "sec_edgar_filing"
+    SEDAR_FILING = "sedar_filing"
     CANADA_CORP_RECORD = "canada_corp_record"
     META_AD = "meta_ad"
     WHOIS_RECORD = "whois_record"
