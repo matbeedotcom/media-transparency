@@ -265,6 +265,23 @@ class IngestionResult(BaseModel):
         return None
 
 
+class SingleIngestionResult(BaseModel):
+    """Result of ingesting a single entity."""
+
+    entity_id: UUID | None = None
+    entity_name: str | None = None
+    entity_type: str | None = None
+    is_new: bool = False
+    relationships_created: int = 0
+    source: str = ""
+    error: str | None = None
+
+    @property
+    def success(self) -> bool:
+        """Check if ingestion was successful."""
+        return self.entity_id is not None and self.error is None
+
+
 class BaseIngester(ABC, Generic[T]):
     """Abstract base class for data source ingesters.
 
@@ -338,6 +355,28 @@ class BaseIngester(ABC, Generic[T]):
             timestamp: Sync completion timestamp
         """
         ...
+
+    async def ingest_single(
+        self,
+        identifier: str,
+        identifier_type: str,
+    ) -> SingleIngestionResult | None:
+        """Ingest a single entity by identifier.
+
+        This method is used by the research system to fetch entities
+        that aren't already in the database. Subclasses should override
+        this to implement single-entity ingestion from their data source.
+
+        Args:
+            identifier: The identifier value (name, EIN, BN, CIK, etc.)
+            identifier_type: The type of identifier ("name", "ein", "bn", "cik", etc.)
+
+        Returns:
+            SingleIngestionResult if successful, None if not supported
+            or entity not found in source.
+        """
+        # Default implementation: not supported
+        return None
 
     async def run(
         self, config: IngestionConfig | None = None, run_id: UUID | None = None

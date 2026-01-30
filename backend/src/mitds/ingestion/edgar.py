@@ -36,7 +36,7 @@ from ..models import (
 )
 from ..models.evidence import Evidence, EvidenceType
 from ..storage import compute_content_hash, generate_storage_key, get_storage
-from .base import BaseIngester, IngestionConfig, IngestionResult, with_retry
+from .base import BaseIngester, IngestionConfig, IngestionResult, SingleIngestionResult, with_retry
 
 logger = get_context_logger(__name__)
 
@@ -250,6 +250,87 @@ class SECEDGARIngester(BaseIngester[EDGARCompany]):
     async def save_sync_time(self, timestamp: datetime) -> None:
         """Save sync timestamp (handled by base class run method)."""
         pass  # Managed by IngestionResult
+
+    async def ingest_single(
+        self,
+        identifier: str,
+        identifier_type: str,
+    ) -> SingleIngestionResult | None:
+        """Ingest a single company from SEC EDGAR by CIK or name.
+
+        Args:
+            identifier: The CIK, EIN, or company name
+            identifier_type: One of "cik", "ein", "name"
+
+        Returns:
+            SingleIngestionResult if found and processed, None otherwise
+        """
+        cik_to_fetch: str | None = None
+
+        if identifier_type == "cik":
+            cik_to_fetch = identifier.zfill(10)
+
+        elif identifier_type == "ein":
+            # Need to search for EIN - SEC doesn't have a direct EIN lookup
+            # We'd need to query existing tickers and cross-reference
+            # For now, return None as EIN lookup is not directly supported
+            self.logger.info(f"EIN lookup not directly supported by SEC EDGAR: {identifier}")
+            return None
+
+        elif identifier_type == "name":
+            # Search company tickers for name match
+            try:
+                tickers_map = await self.fetch_company_tickers()
+                identifier_lower = identifier.lower()
+
+                # Look for exact or close name match
+                for cik, info in tickers_map.items():
+                    if info.get("name", "").lower() == identifier_lower:
+                        cik_to_fetch = cik
+                        break
+
+                # If no exact match, try partial match
+                if not cik_to_fetch:
+                    for cik, info in tickers_map.items():
+                        if identifier_lower in info.get("name", "").lower():
+                            cik_to_fetch = cik
+                            break
+
+            except Exception as e:
+                self.logger.warning(f"Error searching for company by name: {e}")
+                return None
+
+        if not cik_to_fetch:
+            self.logger.info(f"Company not found in SEC EDGAR: {identifier}")
+            return None
+
+        # Fetch and process the company
+        try:
+            data = await self.fetch_company_submissions(cik_to_fetch)
+            if not data:
+                return None
+
+            company = self.parse_company(data)
+            company.raw_submissions = data
+
+            # Process the record
+            result = await self.process_record(company)
+
+            return SingleIngestionResult(
+                entity_id=UUID(result["entity_id"]) if result.get("entity_id") else None,
+                entity_name=company.name,
+                entity_type="organization",
+                is_new=result.get("created", False),
+                relationships_created=0,  # Could count from Neo4j ops if needed
+                source="sec_edgar",
+            )
+
+        except Exception as e:
+            self.logger.error(f"Error ingesting company {identifier}: {e}")
+            return SingleIngestionResult(
+                source="sec_edgar",
+                error=str(e),
+            )
 
     async def fetch_company_tickers(self) -> dict[str, dict[str, Any]]:
         """Fetch mapping of tickers to CIKs.

@@ -33,7 +33,7 @@ from ..db import get_db_session, get_neo4j_session
 from ..logging import get_context_logger
 from ..models.evidence import EvidenceType
 from ..storage import compute_content_hash
-from .base import BaseIngester, IngestionConfig, IngestionResult, with_retry
+from .base import BaseIngester, IngestionConfig, IngestionResult, SingleIngestionResult, with_retry
 
 logger = get_context_logger(__name__)
 
@@ -546,6 +546,100 @@ class SEDARIngester(BaseIngester[SEDARFiling]):
         """Save sync timestamp (T036)."""
         pass  # Managed by IngestionResult in base class
 
+    async def ingest_single(
+        self,
+        identifier: str,
+        identifier_type: str,
+    ) -> SingleIngestionResult | None:
+        """Ingest a single Canadian company from SEDAR+/SEDI.
+
+        Args:
+            identifier: The company name, BN, or SEDAR profile ID
+            identifier_type: One of "name", "bn", "sedar_profile"
+
+        Returns:
+            SingleIngestionResult if found and processed, None otherwise
+        """
+        print(f"[SEDAR] ingest_single called: identifier={identifier}, type={identifier_type}")
+        self.logger.info(f"ingest_single called: identifier={identifier}, type={identifier_type}")
+        try:
+            filings_processed = 0
+            entity_id = None
+            entity_name = None
+            is_new = False
+
+            if identifier_type == "sedar_profile":
+                # Fetch by SEDI issuer number
+                async for filing in self._fetch_sedi_insiders(identifier, limit=1):
+                    result = await self.process_record(filing)
+                    if result.get("entity_id"):
+                        entity_id = UUID(result["entity_id"])
+                        entity_name = filing.subject_company
+                        is_new = result.get("created", False)
+                        filings_processed += 1
+                        break
+
+            elif identifier_type == "name":
+                # Search by company name
+                print(f"[SEDAR] Starting name search for: {identifier}")
+                self.logger.info(f"Starting name search for: {identifier}")
+                async for filing in self._search_sedi_by_name(identifier, limit=1):
+                    result = await self.process_record(filing)
+                    if result.get("entity_id"):
+                        entity_id = UUID(result["entity_id"])
+                        entity_name = filing.subject_company
+                        is_new = result.get("created", False)
+                        filings_processed += 1
+                        break
+
+            elif identifier_type == "bn":
+                # BN lookup - search by associated company name via our database
+                # SEDAR doesn't directly support BN lookup
+                async with get_db_session() as db:
+                    from sqlalchemy import text
+                    result = await db.execute(
+                        text("""
+                            SELECT name FROM entities
+                            WHERE external_ids->>'bn' = :bn
+                            OR external_ids->>'business_number' = :bn
+                            LIMIT 1
+                        """),
+                        {"bn": identifier},
+                    )
+                    row = result.fetchone()
+                    if row:
+                        # Recurse with name lookup
+                        print(f"[SEDAR] BN {identifier} resolved to name: {row.name}, recursing...")
+                        self.logger.info(f"BN {identifier} resolved to name: {row.name}, recursing...")
+                        return await self.ingest_single(row.name, "name")
+
+                self.logger.info(f"BN not found in database for SEDAR lookup: {identifier}")
+                print(f"[SEDAR] BN not found in database: {identifier}")
+                return None
+
+            if entity_id:
+                return SingleIngestionResult(
+                    entity_id=entity_id,
+                    entity_name=entity_name,
+                    entity_type="organization",
+                    is_new=is_new,
+                    relationships_created=filings_processed,
+                    source="sedar",
+                )
+
+            self.logger.info(f"No SEDAR data found for: {identifier}")
+            return None
+
+        except Exception as e:
+            import traceback
+            print(f"[SEDAR] ERROR ingesting {identifier}: {e}")
+            print(f"[SEDAR] Traceback: {traceback.format_exc()}")
+            self.logger.error(f"Error ingesting from SEDAR {identifier}: {e}")
+            return SingleIngestionResult(
+                source="sedar",
+                error=str(e),
+            )
+
     async def fetch_records(
         self, config: IngestionConfig
     ) -> AsyncIterator[SEDARFiling]:
@@ -605,14 +699,124 @@ class SEDARIngester(BaseIngester[SEDARFiling]):
                 yield filing
             return
 
-        # Mode 3: No targets specified - log info about manual workflow
-        self.logger.info(
-            "No targets specified. SEDAR+ requires manual search workflow:\n"
-            "1. Visit https://www.sedarplus.ca/\n"
-            "2. Search for Early Warning Reports\n"
-            "3. Export results as CSV\n"
-            "4. Run: mitds ingest sedar --csv-path /path/to/export.csv"
-        )
+        # Mode 3: No targets specified - query Neo4j for Canadian companies
+        self.logger.info("No targets specified - querying database for Canadian companies...")
+
+        companies = await self._get_canadian_companies_from_db()
+
+        if not companies:
+            self.logger.info(
+                "No Canadian companies found in database. Options:\n"
+                "1. Run: mitds ingest sedar --target 'Company Name'\n"
+                "2. Export CSV from https://www.sedarplus.ca/\n"
+                "3. Run: mitds ingest sedar --csv-path /path/to/export.csv"
+            )
+            return
+
+        self.logger.info(f"Found {len(companies)} Canadian companies in database to search")
+
+        total_processed = 0
+        for i, company_name in enumerate(companies):
+            if config.limit and total_processed >= config.limit:
+                self.logger.info(f"Limit of {config.limit} reached")
+                break
+
+            try:
+                self.logger.info(f"Searching SEDI for: {company_name} ({i+1}/{len(companies)})")
+
+                # Calculate remaining limit for this company
+                remaining_limit = None
+                if config.limit:
+                    remaining_limit = config.limit - total_processed
+                    if remaining_limit <= 0:
+                        break
+
+                company_count = 0
+                async for filing in self._search_sedi_by_name(company_name, remaining_limit):
+                    yield filing
+                    company_count += 1
+                    total_processed += 1
+
+                    if config.limit and total_processed >= config.limit:
+                        break
+
+                self.logger.info(f"Found {company_count} insiders for {company_name}")
+
+                # Rate limiting between companies
+                await asyncio.sleep(2.0)
+
+            except Exception as e:
+                self.logger.warning(f"Error searching SEDI for {company_name}: {e}")
+                continue
+
+        self.logger.info(f"Total: processed {total_processed} insider records from {len(companies)} companies")
+
+    async def _get_canadian_companies_from_db(self) -> list[str]:
+        """Query Neo4j for Canadian companies to search in SEDI.
+
+        Returns a list of company names that:
+        1. Have Canadian jurisdiction (CA or CA-XX)
+        2. Are issuers (targets of OWNS relationships) with SEDAR profiles
+        3. Have "Canada" or "Canadian" in their name
+
+        Returns:
+            List of company names to search in SEDI
+        """
+        from ..db import get_neo4j_session
+
+        companies: list[str] = []
+
+        try:
+            async with get_neo4j_session() as session:
+                # Query 1: Get issuers with SEDAR profiles (companies we already know about from SEDI)
+                # Focus on ones that are targets of OWNS relationships
+                result = await session.run("""
+                    MATCH (issuer:Organization)
+                    WHERE issuer.sedar_profile IS NOT NULL
+                        AND issuer.sedar_profile STARTS WITH '0'
+                    RETURN DISTINCT issuer.name AS name
+                    ORDER BY issuer.name
+                    LIMIT 100
+                """)
+
+                records = await result.data()
+                for record in records:
+                    name = record["name"]
+                    if name and len(name) > 3:
+                        # Extract core company name for SEDI search
+                        # Remove common suffixes that might cause search issues
+                        search_name = name
+                        for suffix in [" Inc.", " Corp.", " Ltd.", " L.P.", " LP"]:
+                            if search_name.endswith(suffix):
+                                search_name = search_name[:-len(suffix)]
+                                break
+                        if search_name not in companies:
+                            companies.append(search_name)
+
+                # Query 2: Get Canadian media companies by jurisdiction
+                result2 = await session.run("""
+                    MATCH (o:Organization)
+                    WHERE (o.jurisdiction = 'CA' OR o.jurisdiction STARTS WITH 'CA-')
+                        AND (o.name CONTAINS 'Media' OR o.name CONTAINS 'News'
+                             OR o.name CONTAINS 'Broadcast' OR o.name CONTAINS 'Television'
+                             OR o.name CONTAINS 'Communications')
+                    RETURN DISTINCT o.name AS name
+                    ORDER BY o.name
+                    LIMIT 50
+                """)
+
+                records2 = await result2.data()
+                for record in records2:
+                    name = record["name"]
+                    if name and name not in companies and len(name) > 5:
+                        companies.append(name)
+
+                self.logger.debug(f"Found {len(companies)} Canadian companies from Neo4j")
+
+        except Exception as e:
+            self.logger.warning(f"Error querying Neo4j for Canadian companies: {e}")
+
+        return companies
 
     async def _fetch_and_parse_document(
         self, url: str
@@ -901,6 +1105,91 @@ class SEDARIngester(BaseIngester[SEDARFiling]):
             if client:
                 await client.aclose()
 
+    async def _simulate_human_behavior(self, page) -> None:
+        """Simulate human-like behavior to avoid bot detection.
+
+        Performs random mouse movements, scrolling, and delays.
+        """
+        import random
+
+        try:
+            # Random mouse movements
+            for _ in range(random.randint(2, 5)):
+                x = random.randint(100, 800)
+                y = random.randint(100, 600)
+                await page.mouse.move(x, y)
+                await page.wait_for_timeout(random.randint(50, 200))
+
+            # Small random scroll
+            await page.evaluate(f"window.scrollBy(0, {random.randint(50, 200)})")
+            await page.wait_for_timeout(random.randint(300, 800))
+
+            # Scroll back up
+            await page.evaluate(f"window.scrollBy(0, -{random.randint(30, 100)})")
+            await page.wait_for_timeout(random.randint(200, 500))
+
+        except Exception as e:
+            self.logger.debug(f"Human simulation error (non-fatal): {e}")
+
+    async def _bypass_captcha(self, page) -> bool:
+        """Attempt to bypass ShieldSquare/Radware captcha.
+
+        Uses multiple strategies:
+        1. Wait for JavaScript challenge to auto-resolve
+        2. Simulate human behavior (mouse movements, scrolling)
+        3. Trigger form interactions
+        4. Wait for redirect
+
+        Returns:
+            True if captcha was bypassed, False otherwise
+        """
+        import random
+
+        self.logger.info("Attempting captcha bypass strategies...")
+
+        for attempt in range(8):
+            # Strategy 1: Wait with human-like behavior
+            await self._simulate_human_behavior(page)
+            await page.wait_for_timeout(random.randint(4000, 8000))
+
+            # Check if captcha resolved
+            page_content = await page.content()
+            if "captcha" not in page_content.lower() and "shieldsquare" not in page_content.lower() and "perfdrive" not in page_content.lower():
+                self.logger.info(f"Captcha bypassed on attempt {attempt + 1}!")
+                return True
+
+            self.logger.debug(f"Captcha still present (attempt {attempt + 1}/8)")
+
+            # Strategy 2: Try clicking in random page areas
+            if attempt == 2:
+                try:
+                    await page.mouse.click(random.randint(400, 600), random.randint(300, 500))
+                    await page.wait_for_timeout(2000)
+                except Exception:
+                    pass
+
+            # Strategy 3: Try pressing keys
+            if attempt == 4:
+                try:
+                    await page.keyboard.press("Tab")
+                    await page.wait_for_timeout(500)
+                    await page.keyboard.press("Tab")
+                    await page.wait_for_timeout(1000)
+                except Exception:
+                    pass
+
+            # Strategy 4: Reload page (sometimes helps reset the challenge)
+            if attempt == 6:
+                try:
+                    self.logger.debug("Attempting page reload...")
+                    await page.reload(wait_until="load", timeout=30000)
+                    await page.wait_for_timeout(5000)
+                    await self._simulate_human_behavior(page)
+                except Exception as e:
+                    self.logger.debug(f"Reload failed: {e}")
+
+        return False
+
     async def _search_sedi_with_playwright(
         self, company_name: str, limit: int | None = None
     ) -> AsyncIterator[SEDARFiling]:
@@ -922,90 +1211,236 @@ class SEDARIngester(BaseIngester[SEDARFiling]):
             )
             return
 
+        import random
         from playwright.async_api import async_playwright
 
         self.logger.info(f"Searching SEDI with Playwright for: {company_name}")
+        print(f"[SEDI] Starting Playwright search for: {company_name}")
 
         async with async_playwright() as p:
-            # Launch browser - try to avoid bot detection
-            browser = await p.chromium.launch(
-                headless=True,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                ]
-            )
+            print("[SEDI] Playwright context created, launching browser...")
+            # Try Firefox first (better captcha bypass), fall back to Chromium
+            try:
+                print("[SEDI] Attempting Firefox launch...")
+                browser = await p.firefox.launch(
+                    headless=False,  # Non-headless is much better for captcha bypass
+                    firefox_user_prefs={
+                        "dom.webdriver.enabled": False,
+                        "useAutomationExtension": False,
+                    }
+                )
+                print("[SEDI] Firefox launched successfully")
+                self.logger.debug("Using Firefox browser (non-headless)")
+            except Exception as e:
+                print(f"[SEDI] Firefox launch failed: {e}, falling back to Chromium...")
+                self.logger.debug(f"Firefox launch failed, falling back to Chromium: {e}")
+                browser = await p.chromium.launch(
+                    headless=False,  # Non-headless mode
+                    args=[
+                        "--disable-blink-features=AutomationControlled",
+                        "--no-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-infobars",
+                        "--disable-background-timer-throttling",
+                        "--disable-backgrounding-occluded-windows",
+                        "--disable-renderer-backgrounding",
+                        "--window-size=1920,1080",
+                        "--start-maximized",
+                    ]
+                )
+                print("[SEDI] Chromium launched successfully")
+
+            # Randomize viewport slightly to appear more human
+            viewport_width = 1920 + random.randint(-100, 100)
+            viewport_height = 1080 + random.randint(-50, 50)
 
             # Create context with realistic settings
+            print("[SEDI] Creating browser context...")
             context = await browser.new_context(
                 user_agent=SEDI_USER_AGENT,
-                viewport={"width": 1920, "height": 1080},
+                viewport={"width": viewport_width, "height": viewport_height},
                 locale="en-CA",
                 timezone_id="America/Toronto",
+                # Add more realistic browser properties
+                java_script_enabled=True,
+                has_touch=False,
+                is_mobile=False,
+                device_scale_factor=1,
             )
+            print("[SEDI] Browser context created")
 
             # Try to apply stealth if available
             try:
                 from playwright_stealth import stealth_async
                 page = await context.new_page()
                 await stealth_async(page)
+                print("[SEDI] Page created with stealth")
                 self.logger.debug("Applied playwright-stealth")
             except ImportError:
                 page = await context.new_page()
+                print("[SEDI] Page created (no stealth)")
                 self.logger.debug("playwright-stealth not available")
+
+            # Inject additional anti-detection JavaScript
+            print("[SEDI] Adding init script...")
+            await page.add_init_script("""
+                // Override webdriver detection
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+
+                // Override plugins to look more realistic
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [1, 2, 3, 4, 5]
+                });
+
+                // Override languages
+                Object.defineProperty(navigator, 'languages', {
+                    get: () => ['en-CA', 'en-US', 'en']
+                });
+
+                // Override permissions
+                const originalQuery = window.navigator.permissions.query;
+                window.navigator.permissions.query = (parameters) => (
+                    parameters.name === 'notifications' ?
+                        Promise.resolve({ state: Notification.permission }) :
+                        originalQuery(parameters)
+                );
+
+                // Add chrome object if missing
+                if (!window.chrome) {
+                    window.chrome = { runtime: {} };
+                }
+            """)
+            print("[SEDI] Init script added")
 
             try:
                 # Navigate to SEDI insider search page
                 url = f"{SEDI_INSIDER_SEARCH_URL}?menukey=15.01.00&locale=en_CA"
+                print(f"[SEDI] Navigating to: {url}")
                 self.logger.debug(f"Navigating to: {url}")
 
+                # Random delay before navigation (human-like)
+                print("[SEDI] Waiting before navigation...")
+                await page.wait_for_timeout(random.randint(500, 1500))
+
                 # Use 'load' instead of 'networkidle' to avoid timeout on captcha pages
+                print("[SEDI] Starting page.goto...")
                 await page.goto(url, wait_until="load", timeout=30000)
+                print("[SEDI] Navigation complete!")
 
-                # Wait for the page to settle
-                await page.wait_for_timeout(5000)
+                # Human-like random delay
+                print("[SEDI] Waiting after navigation...")
+                await page.wait_for_timeout(random.randint(2000, 4000))
+                print("[SEDI] Wait complete, proceeding...")
 
-                # Check if we hit a captcha page
-                page_content = await page.content()
-                captcha_detected = "captcha" in page_content.lower() or "shieldsquare" in page_content.lower() or "perfdrive" in page_content.lower()
+                # Simulate human mouse movement
+                print("[SEDI] Simulating human behavior...")
+                await self._simulate_human_behavior(page)
+                print("[SEDI] Human simulation done")
 
-                if captcha_detected:
-                    self.logger.info("SEDI captcha detected, waiting for auto-resolution...")
-                    # ShieldSquare often auto-resolves after a delay - need longer waits
-                    for attempt in range(6):
-                        await page.wait_for_timeout(8000)
-                        page_content = await page.content()
-                        if "captcha" not in page_content.lower() and "shieldsquare" not in page_content.lower():
-                            self.logger.info("Captcha resolved!")
-                            break
-                        self.logger.debug(f"Captcha still present (attempt {attempt + 1}/6)")
+                # Check if we hit an actual captcha blocking us (not just captcha JS in background)
+                # The real test is whether we can find the SEDI form elements
+                print("[SEDI] Checking for SEDI form elements...")
+                issuer_input_check = page.locator("input[name='ISSUER_NAME'], input[id*='ISSUER'], input[name*='issuer']")
+                form_count = await issuer_input_check.count()
+                print(f"[SEDI] Found {form_count} form elements")
+
+                if form_count == 0:
+                    # No form found - might be captcha or still loading
+                    print("[SEDI] No form found, checking page content...")
+                    page_content = await page.content()
+                    print(f"[SEDI] Got page content ({len(page_content)} chars)")
+
+                    # Check if it's a full captcha block page (very short content with captcha)
+                    captcha_blocking = len(page_content) < 5000 and ("captcha" in page_content.lower() or "shieldsquare" in page_content.lower())
+                    print(f"[SEDI] Captcha blocking page: {captcha_blocking}")
+
+                    if captcha_blocking:
+                        print("[SEDI] Attempting captcha bypass...")
+                        self.logger.info("SEDI captcha detected, attempting bypass...")
+                        captcha_bypassed = await self._bypass_captcha(page)
+                        if not captcha_bypassed:
+                            print("[SEDI] Captcha bypass FAILED")
+                            self.logger.warning("Captcha bypass failed after all attempts")
+                        else:
+                            print("[SEDI] Captcha bypass SUCCEEDED")
+                    else:
+                        # Wait a bit more for page to fully load
+                        print("[SEDI] Page loaded but no form yet, waiting for dynamic content...")
+                        await page.wait_for_timeout(3000)
+                else:
+                    print("[SEDI] Form elements found - no captcha blocking us!")
 
                 # Try to find and fill the issuer name field
-                issuer_input = page.locator("input[name='issuer_name'], #issuer_name, input[id*='issuer']")
-                if await issuer_input.count() > 0:
+                print("[SEDI] Looking for issuer input field...")
+                issuer_input = page.locator("input[name='ISSUER_NAME'], input[id*='ISSUER'], input[name*='issuer'], input[name='issuer_name']")
+                input_count = await issuer_input.count()
+                print(f"[SEDI] Found {input_count} issuer input fields")
+                self.logger.info(f"Found {input_count} issuer name input fields")
+
+                if input_count > 0:
+                    print(f"[SEDI] Filling issuer name: {company_name}")
                     await issuer_input.first.fill(company_name)
-                    self.logger.debug(f"Filled issuer name: {company_name}")
+                    self.logger.info(f"Filled issuer name: {company_name}")
 
                     # Set search type to "Contains" if available
+                    print("[SEDI] Looking for search type selector...")
                     search_type = page.locator("select[name='ISSUER_NAME_SEARCH_TYPE']")
-                    if await search_type.count() > 0:
+                    search_type_count = await search_type.count()
+                    print(f"[SEDI] Found {search_type_count} search type selectors")
+                    if search_type_count > 0:
                         await search_type.select_option("2")  # 2 = Contains
+                        print("[SEDI] Set search type to 'Contains'")
+                        self.logger.debug("Set search type to 'Contains'")
 
                     # Click search/submit button
+                    print("[SEDI] Looking for submit button...")
                     submit_btn = page.locator("input[type='submit'], button[type='submit'], input[value='Search']")
-                    if await submit_btn.count() > 0:
+                    submit_count = await submit_btn.count()
+                    print(f"[SEDI] Found {submit_count} submit buttons")
+                    self.logger.info(f"Found {submit_count} submit buttons")
+
+                    if submit_count > 0:
+                        print("[SEDI] Clicking search button...")
+                        self.logger.info("Clicking search button...")
                         await submit_btn.first.click()
+                        print("[SEDI] Waiting for search results (networkidle)...")
                         await page.wait_for_load_state("networkidle", timeout=30000)
+                        print("[SEDI] Search completed!")
+                        self.logger.info("Search completed")
+                    else:
+                        print("[SEDI] WARNING: No submit button found!")
+                        self.logger.warning("No submit button found on SEDI page")
+                else:
+                    page_title = await page.title()
+                    print(f"[SEDI] No issuer input found! Page title: {page_title}")
+                    self.logger.warning(
+                        f"No issuer name input found on SEDI page. "
+                        f"Page might still be loading or captcha blocking. "
+                        f"Page title: {page_title}"
+                    )
+                    # Log available inputs for debugging
+                    all_inputs = await page.locator("input").all()
+                    input_names = []
+                    for inp in all_inputs[:10]:  # First 10 inputs
+                        name = await inp.get_attribute("name")
+                        inp_id = await inp.get_attribute("id")
+                        input_names.append(f"{name or inp_id}")
+                    print(f"[SEDI] Available inputs: {input_names}")
+                    self.logger.debug(f"Available inputs: {input_names}")
 
                 # Parse results
+                print("[SEDI] Waiting before parsing results...")
                 await page.wait_for_timeout(2000)
+                print("[SEDI] Getting page content for parsing...")
                 page_content = await page.content()
+                print(f"[SEDI] Got results page content ({len(page_content)} chars)")
 
                 # Check for Postmedia or Chatham in the results
                 if "Postmedia" in page_content:
+                    print("[SEDI] Found 'Postmedia' in results!")
                     self.logger.info("Found 'Postmedia' in SEDI results!")
                 if "Chatham" in page_content:
+                    print("[SEDI] Found 'Chatham' in results!")
                     self.logger.info("Found 'Chatham' in SEDI results!")
 
                 # Parse the page with lxml to find insider IDs
@@ -1015,6 +1450,7 @@ class SEDARIngester(BaseIngester[SEDARFiling]):
                 # Get all radio button values (insider IDs)
                 # SEDI uses name='UID_INSPR' with numeric values for insider selection
                 insider_ids = tree.xpath("//input[@type='RADIO' or @type='radio'][@name='UID_INSPR']/@value")
+                print(f"[SEDI] Found {len(insider_ids)} insider radio buttons")
                 self.logger.debug(f"Found {len(insider_ids)} insider IDs")
 
                 count = 0
@@ -1083,10 +1519,12 @@ class SEDARIngester(BaseIngester[SEDARFiling]):
 
                 # Fallback: parse from the search results page directly if no radio buttons
                 if count == 0:
+                    print("[SEDI] No radio buttons found, trying fallback parsing...")
                     self.logger.debug("No radio buttons found, falling back to direct parsing")
 
                     # SEDI uses nested tables with font tags for data
                     insider_fonts = tree.xpath("//td//font[string-length(normalize-space(text())) > 5]")
+                    print(f"[SEDI] Fallback: Found {len(insider_fonts)} font elements to check")
                     self.logger.debug(f"Found {len(insider_fonts)} font elements")
 
                     seen_insiders = set()
@@ -1151,6 +1589,7 @@ class SEDARIngester(BaseIngester[SEDARFiling]):
                             content_type="text/html",
                         )
 
+                        print(f"[SEDI] Found insider (fallback): {text}")
                         self.logger.info(
                             f"Found SEDI insider (fallback): {text} ({insider_id or 'no ID'}) -> {company_name}"
                         )
@@ -1158,7 +1597,9 @@ class SEDARIngester(BaseIngester[SEDARFiling]):
                         count += 1
                         yield filing
 
+                print(f"[SEDI] Total insiders found: {count}")
                 if count == 0:
+                    print(f"[SEDI] No insiders found! Page preview: {tree.text_content()[:300]}")
                     self.logger.debug(f"No insider records found. Page text preview: {tree.text_content()[:500]}")
 
             except Exception as e:
@@ -1369,8 +1810,10 @@ class SEDARIngester(BaseIngester[SEDARFiling]):
         Yields:
             SEDARFiling records for insider relationships found
         """
+        print(f"[SEDI] _search_sedi_by_name called for: {company_name}")
         # Use Playwright if available (required due to bot protection)
         if PLAYWRIGHT_AVAILABLE:
+            print(f"[SEDI] Playwright IS available, proceeding...")
             self.logger.info("Using Playwright for SEDI search (bot protection bypass)")
             async for filing in self._search_sedi_with_playwright(company_name, limit):
                 yield filing

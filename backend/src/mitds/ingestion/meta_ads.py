@@ -29,7 +29,7 @@ from ..config import get_settings
 from ..db import get_db_session, get_neo4j_session
 from ..logging import get_context_logger
 from ..storage import get_storage
-from .base import BaseIngester, IngestionConfig, RetryConfig, with_retry
+from .base import BaseIngester, IngestionConfig, RetryConfig, SingleIngestionResult, with_retry
 
 logger = get_context_logger(__name__)
 
@@ -512,8 +512,24 @@ class MetaAdIngester(BaseIngester[MetaAdRecord]):
                 pass
 
         # Extract funding entity from bylines
-        bylines = ad_data.get("bylines", [])
-        funding_entity = bylines[0] if bylines else None
+        # bylines can be a string or a list depending on API version
+        bylines = ad_data.get("bylines")
+        funding_entity = None
+        if bylines:
+            if isinstance(bylines, str):
+                funding_entity = bylines
+            elif isinstance(bylines, list) and len(bylines) > 0:
+                # Could be list of strings or list of dicts
+                first = bylines[0]
+                if isinstance(first, str):
+                    funding_entity = first
+                elif isinstance(first, dict):
+                    funding_entity = first.get("byline") or first.get("name") or str(first)
+
+        # Sanity check: if funding_entity is suspiciously short, it's likely a parsing error
+        if funding_entity and len(funding_entity) <= 2:
+            logger.warning(f"Suspicious funding_entity '{funding_entity}' for ad {ad_data.get('id')}, raw bylines: {bylines}")
+            funding_entity = None  # Will fall back to page_name in process_record
 
         return MetaAdRecord(
             ad_id=ad_data["id"],
@@ -550,7 +566,7 @@ class MetaAdIngester(BaseIngester[MetaAdRecord]):
         - Ad event record
         - SPONSORED_BY relationship
         """
-        result = {"created": False, "updated": False, "duplicate": False}
+        result = {"created": False, "updated": False, "duplicate": False, "entity_id": None}
 
         async with get_neo4j_session() as session:
             # Check if ad already exists
@@ -634,6 +650,10 @@ class MetaAdIngester(BaseIngester[MetaAdRecord]):
                 )
                 sponsor_record = await sponsor_result.single()
 
+                # Capture the sponsor entity ID for the research system
+                if sponsor_record and sponsor_record.get("id"):
+                    result["entity_id"] = sponsor_record["id"]
+
                 # Create SPONSORED_BY relationship
                 rel_query = """
                 MATCH (a:Ad {meta_ad_id: $ad_id})
@@ -683,6 +703,107 @@ class MetaAdIngester(BaseIngester[MetaAdRecord]):
         """Save the timestamp of a successful sync."""
         # Sync time is saved implicitly via ingestion_runs table
         pass
+
+    async def ingest_single(
+        self,
+        identifier: str,
+        identifier_type: str,
+    ) -> SingleIngestionResult | None:
+        """Ingest ads for a single sponsor/page from Meta Ad Library.
+
+        Args:
+            identifier: The page name, page ID, or funding entity name
+            identifier_type: One of "name", "meta_page_id", "funding_entity"
+
+        Returns:
+            SingleIngestionResult if ads found and processed, None otherwise
+        """
+        try:
+            access_token = await self.get_access_token()
+
+            # Build search query based on identifier type
+            search_query = None
+            page_ids = None
+
+            if identifier_type == "meta_page_id":
+                page_ids = [identifier]
+            elif identifier_type in ("name", "funding_entity"):
+                search_query = identifier
+
+            if not search_query and not page_ids:
+                return None
+
+            # Fetch ads matching the query
+            ads_processed = 0
+            entity_id = None
+            entity_name = None
+            is_new = False
+
+            # Use the same API call structure as fetch_records
+            params = {
+                "access_token": access_token,
+                "ad_reached_countries": "US,CA",
+                "ad_type": "POLITICAL_AND_ISSUE_ADS",
+                "ad_active_status": "ALL",
+                "fields": ",".join(DEFAULT_AD_FIELDS),
+                "limit": 10,  # Only fetch a few ads for single entity lookup
+            }
+
+            if search_query:
+                params["search_terms"] = search_query
+            if page_ids:
+                params["search_page_ids"] = ",".join(page_ids)
+
+            response = await self.http_client.get(
+                META_ADS_ARCHIVE_ENDPOINT, params=params
+            )
+
+            if response.status_code != 200:
+                self.logger.warning(f"Meta API error: {response.status_code}")
+                return None
+
+            data = response.json()
+            ads = data.get("data", [])
+
+            if not ads:
+                self.logger.info(f"No ads found for: {identifier}")
+                return None
+
+            # Process the first few ads to create/update the sponsor entity
+            for ad_data in ads[:5]:
+                try:
+                    record = self._parse_ad(ad_data, "US")
+                    result = await self.process_record(record)
+
+                    if result.get("entity_id") and not entity_id:
+                        entity_id = UUID(result["entity_id"])
+                        entity_name = record.page_name or record.funding_entity
+                        is_new = result.get("created", False)
+
+                    ads_processed += 1
+
+                except Exception as e:
+                    self.logger.warning(f"Error processing ad: {e}")
+                    continue
+
+            if entity_id:
+                return SingleIngestionResult(
+                    entity_id=entity_id,
+                    entity_name=entity_name,
+                    entity_type="organization",
+                    is_new=is_new,
+                    relationships_created=ads_processed,
+                    source="meta_ads",
+                )
+
+            return None
+
+        except Exception as e:
+            self.logger.error(f"Error ingesting from Meta Ads {identifier}: {e}")
+            return SingleIngestionResult(
+                source="meta_ads",
+                error=str(e),
+            )
 
 
 # Celery task for scheduled ingestion

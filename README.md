@@ -185,7 +185,7 @@ npm install
 ```bash
 # Terminal 1: Backend API
 cd backend
-uvicorn src.mitds.main:app --reload --port 8000
+python -m uvicorn src.main:app --reload --port 8001
 
 # Terminal 2: Frontend
 cd frontend
