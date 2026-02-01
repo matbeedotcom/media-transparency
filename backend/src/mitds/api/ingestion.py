@@ -9,9 +9,9 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import text
 
-from . import ValidationError
-from .auth import CurrentUser, OptionalUser
 from ..db import get_db_session
+from . import ValidationError
+from .auth import OptionalUser
 
 router = APIRouter(prefix="/ingestion")
 
@@ -127,7 +127,7 @@ async def get_ingestion_status(
         sources_status = []
 
         # Sources that are enabled (free, no API key required)
-        enabled_sources = ["irs990", "cra", "sec_edgar", "canada_corps", "sedar"]
+        enabled_sources = ["irs990", "cra", "sec_edgar", "canada_corps", "sedar", "alberta-nonprofits"]
         # Sources that require API keys
         disabled_sources = ["opencorporates", "meta_ads"]
 
@@ -358,9 +358,9 @@ async def _run_ingestion_task(
     request: IngestionTriggerRequest,
 ):
     """Background task to run ingestion."""
-    from ..ingestion import run_irs990_ingestion, run_cra_ingestion
-    from ..ingestion.edgar import run_sec_edgar_ingestion
+    from ..ingestion import run_cra_ingestion, run_irs990_ingestion
     from ..ingestion.canada_corps import run_canada_corps_ingestion
+    from ..ingestion.edgar import run_sec_edgar_ingestion
     from ..ingestion.meta_ads import run_meta_ads_ingestion
 
     try:
@@ -403,6 +403,14 @@ async def _run_ingestion_task(
         elif source == "sedar":
             from ..ingestion.sedar import run_sedar_ingestion
             result = await run_sedar_ingestion(
+                incremental=request.incremental,
+                limit=request.limit,
+                target_entities=request.target_entities,
+                run_id=run_id,
+            )
+        elif source == "alberta-nonprofits":
+            from ..ingestion.provincial import run_alberta_nonprofits_ingestion
+            result = await run_alberta_nonprofits_ingestion(
                 incremental=request.incremental,
                 limit=request.limit,
                 target_entities=request.target_entities,
@@ -493,7 +501,7 @@ async def trigger_ingestion(
     Returns:
         Job ID and status URL for tracking
     """
-    valid_sources = ["irs990", "cra", "sec_edgar", "canada_corps", "sedar", "opencorporates", "meta_ads"]
+    valid_sources = ["irs990", "cra", "sec_edgar", "canada_corps", "sedar", "opencorporates", "meta_ads", "alberta-nonprofits"]
 
     if source not in valid_sources:
         raise ValidationError(

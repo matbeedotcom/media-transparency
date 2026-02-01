@@ -80,7 +80,7 @@ def ingest_irs990(
     """
     from ..ingestion import run_irs990_ingestion
 
-    click.echo(f"Starting IRS 990 ingestion...")
+    click.echo("Starting IRS 990 ingestion...")
 
     if verbose:
         click.echo(f"  Start year: {start_year or 'previous year'}")
@@ -154,7 +154,7 @@ def ingest_cra(
     """
     from ..ingestion import run_cra_ingestion
 
-    click.echo(f"Starting CRA ingestion...")
+    click.echo("Starting CRA ingestion...")
 
     if verbose:
         click.echo(f"  Mode: {'incremental' if incremental else 'full'}")
@@ -180,6 +180,508 @@ def ingest_cra(
         if verbose:
             import traceback
             traceback.print_exc()
+        sys.exit(1)
+
+
+@cli.command(name="alberta-nonprofits")
+@click.option(
+    "--incremental/--full",
+    default=True,
+    help="Incremental or full sync (default: incremental)",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum number of records to process",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Enable verbose output",
+)
+def ingest_alberta_nonprofits(
+    incremental: bool,
+    limit: int | None,
+    verbose: bool,
+):
+    """Ingest Alberta non-profit organizations.
+
+    Downloads and processes Alberta's Non-Profit Listing from the Open Data portal.
+    Extracts organizations with type, status, registration date, and location.
+
+    Examples:
+
+        # Incremental sync (only changed records)
+        mitds ingest alberta-nonprofits
+
+        # Full sync
+        mitds ingest alberta-nonprofits --full
+
+        # Test with limited records
+        mitds ingest alberta-nonprofits --limit 100 --verbose
+    """
+    from ..ingestion.provincial import run_alberta_nonprofits_ingestion
+
+    click.echo("Starting Alberta non-profit ingestion...")
+
+    if verbose:
+        click.echo(f"  Mode: {'incremental' if incremental else 'full'}")
+        if limit:
+            click.echo(f"  Limit: {limit} records")
+
+    start_time = datetime.now()
+
+    try:
+        result = asyncio.run(
+            run_alberta_nonprofits_ingestion(
+                incremental=incremental,
+                limit=limit,
+            )
+        )
+
+        duration = (datetime.now() - start_time).total_seconds()
+
+        _print_result(result, duration, verbose)
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        if verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
+@cli.command(name="quebec-corps")
+@click.option(
+    "--incremental/--full",
+    default=True,
+    help="Incremental or full sync (default: incremental)",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum number of records to process",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Enable verbose output",
+)
+def ingest_quebec_corps(
+    incremental: bool,
+    limit: int | None,
+    verbose: bool,
+):
+    """Ingest Quebec corporations from Registraire des Entreprises.
+
+    Downloads and processes Quebec's enterprise registry from Données Québec.
+    Includes all corporation types: for-profit, non-profit, cooperatives, etc.
+
+    Quebec has the best bulk data availability among Canadian provinces
+    with daily CSV updates.
+
+    Examples:
+
+        # Incremental sync (only changed records)
+        mitds ingest quebec-corps
+
+        # Full sync
+        mitds ingest quebec-corps --full
+
+        # Test with limited records
+        mitds ingest quebec-corps --limit 100 --verbose
+    """
+    from ..ingestion.provincial.quebec import run_quebec_corps_ingestion
+
+    click.echo("Starting Quebec corporation ingestion...")
+
+    if verbose:
+        click.echo(f"  Mode: {'incremental' if incremental else 'full'}")
+        click.echo("  Source: Données Québec (daily CSV)")
+        if limit:
+            click.echo(f"  Limit: {limit} records")
+
+    start_time = datetime.now()
+
+    try:
+        result = asyncio.run(
+            run_quebec_corps_ingestion(
+                incremental=incremental,
+                limit=limit,
+            )
+        )
+
+        duration = (datetime.now() - start_time).total_seconds()
+
+        _print_result(result, duration, verbose)
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        if verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
+@cli.command(name="ontario-corps")
+@click.option(
+    "--from-csv",
+    type=str,
+    default=None,
+    help="Path to CSV file with corporation data (required for Ontario)",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum number of records to process",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Enable verbose output",
+)
+def ingest_ontario_corps(
+    from_csv: str | None,
+    limit: int | None,
+    verbose: bool,
+):
+    """Ingest Ontario corporations via CSV upload.
+
+    IMPORTANT: Ontario does NOT provide bulk corporation data publicly.
+    The Ontario Business Registry only offers online searches, not bulk exports.
+
+    Use this command with --from-csv to import manually gathered data.
+    Generate a CSV template first with: mitds ingest csv-template
+
+    Examples:
+
+        # Generate template
+        mitds ingest csv-template --output ./ontario_corps.csv
+
+        # Edit the CSV with your Ontario corporation data, then import
+        mitds ingest ontario-corps --from-csv ./ontario_corps.csv
+
+        # Limit records
+        mitds ingest ontario-corps --from-csv ./ontario_corps.csv --limit 100
+    """
+    from ..ingestion.provincial.targeted import run_targeted_ingestion
+
+    if not from_csv:
+        click.echo("Error: Ontario does NOT provide bulk corporation data.", err=True)
+        click.echo("\nOntario Business Registry only offers online searches.", err=True)
+        click.echo("Use --from-csv to import manually gathered data:", err=True)
+        click.echo("\n  1. Generate a CSV template:", err=True)
+        click.echo("     mitds ingest csv-template --output ./ontario_corps.csv", err=True)
+        click.echo("\n  2. Fill in your Ontario corporation data", err=True)
+        click.echo("\n  3. Import the CSV:", err=True)
+        click.echo("     mitds ingest ontario-corps --from-csv ./ontario_corps.csv", err=True)
+        sys.exit(1)
+
+    click.echo("Starting Ontario corporation ingestion (CSV upload)...")
+
+    if verbose:
+        click.echo(f"  Province: ON")
+        click.echo(f"  Mode: csv")
+        click.echo(f"  CSV file: {from_csv}")
+        if limit:
+            click.echo(f"  Limit: {limit} records")
+
+    start_time = datetime.now()
+
+    try:
+        result = asyncio.run(
+            run_targeted_ingestion(
+                province="ON",
+                from_csv=from_csv,
+                limit=limit,
+            )
+        )
+
+        duration = (datetime.now() - start_time).total_seconds()
+
+        _print_result(result, duration, verbose)
+
+    except FileNotFoundError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+    except ValueError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        if verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
+@cli.command(name="cross-reference")
+@click.option(
+    "--provinces",
+    type=str,
+    default=None,
+    help="Comma-separated province codes to cross-reference (default: all)",
+)
+@click.option(
+    "--auto-link-threshold",
+    type=float,
+    default=0.95,
+    help="Threshold for automatic linking (default: 0.95)",
+)
+@click.option(
+    "--review-threshold",
+    type=float,
+    default=0.85,
+    help="Threshold for flagging for review (default: 0.85)",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Enable verbose output",
+)
+def cross_reference_provincial(
+    provinces: str | None,
+    auto_link_threshold: float,
+    review_threshold: float,
+    verbose: bool,
+):
+    """Cross-reference provincial corporations with federal registry.
+
+    Matches provincial corporation records with federal registry data
+    using business number and name matching strategies.
+
+    Match results are classified by confidence:
+    - Auto-link (>=95%): Automatically create SAME_AS relationship
+    - Flag for review (85-95%): Requires manual verification
+    - No match (<85%): No relationship created
+
+    Examples:
+
+        # Cross-reference all provinces
+        mitds ingest cross-reference
+
+        # Cross-reference specific provinces
+        mitds ingest cross-reference --provinces QC,ON,AB
+
+        # Adjust thresholds
+        mitds ingest cross-reference --auto-link-threshold 0.90 --review-threshold 0.80
+    """
+    from ..ingestion.provincial.cross_reference import run_cross_reference
+
+    click.echo("Starting provincial cross-referencing...")
+
+    provinces_list = None
+    if provinces:
+        provinces_list = [p.strip().upper() for p in provinces.split(",")]
+
+    if verbose:
+        click.echo(f"  Provinces: {provinces_list or 'all'}")
+        click.echo(f"  Auto-link threshold: {auto_link_threshold}")
+        click.echo(f"  Review threshold: {review_threshold}")
+
+    start_time = datetime.now()
+
+    try:
+        result = asyncio.run(
+            run_cross_reference(
+                provinces=provinces_list,
+                auto_link_threshold=auto_link_threshold,
+                review_threshold=review_threshold,
+            )
+        )
+
+        duration = (datetime.now() - start_time).total_seconds()
+
+        click.echo("\n" + "=" * 40)
+        click.secho("Cross-Reference Complete", fg="green")
+        click.echo("=" * 40)
+        click.echo(f"Duration: {duration:.1f} seconds")
+        click.echo(f"Total processed: {result.get('total_processed', 0)}")
+        click.echo(f"Matched by BN: {result.get('matched_by_bn', 0)}")
+        click.echo(f"Matched by exact name: {result.get('matched_by_exact_name', 0)}")
+        click.echo(f"Matched by fuzzy name: {result.get('matched_by_fuzzy_name', 0)}")
+        click.echo(f"Auto-linked: {result.get('auto_linked', 0)}")
+        click.echo(f"Flagged for review: {result.get('flagged_for_review', 0)}")
+        click.echo(f"No match: {result.get('no_match', 0)}")
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        if verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
+@cli.command(name="targeted-corps")
+@click.option(
+    "--province",
+    type=str,
+    required=True,
+    help="Province code (ON, SK, MB, NB, PE/PEI, NL, NT, YT, NU)",
+)
+@click.option(
+    "--target",
+    type=str,
+    default=None,
+    help="Comma-separated entity names to search for (web scraping mode)",
+)
+@click.option(
+    "--from-csv",
+    type=str,
+    default=None,
+    help="Path to CSV file with corporation data (manual upload mode)",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum number of records to process",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Enable verbose output",
+)
+def ingest_targeted_corps(
+    province: str,
+    target: str | None,
+    from_csv: str | None,
+    limit: int | None,
+    verbose: bool,
+):
+    """Ingest corporations from provinces without bulk data access.
+
+    Supports two modes:
+    1. Target mode (--target): Search for specific entities by name via web scraping
+    2. CSV mode (--from-csv): Import pre-gathered data from a CSV file
+
+    Provinces without bulk data: ON, SK, MB, NB, PE/PEI, NL, NT, YT, NU
+
+    Note: Web scraping is fragile and may require updates if websites change.
+    For reliable ingestion, use CSV upload mode with manually gathered data.
+
+    Examples:
+
+        # Search for specific entities (web scraping)
+        mitds ingest targeted-corps --province SK --target "Postmedia Network,Corus Entertainment"
+
+        # Import from CSV file (reliable)
+        mitds ingest targeted-corps --province SK --from-csv /path/to/known_entities.csv
+
+        # Generate CSV template first
+        mitds ingest csv-template --output /path/to/template.csv
+    """
+    from ..ingestion.provincial.targeted import run_targeted_ingestion
+
+    if not target and not from_csv:
+        click.echo("Error: Either --target or --from-csv is required", err=True)
+        click.echo("\nExamples:", err=True)
+        click.echo("  mitds ingest targeted-corps --province SK --target \"Company A,Company B\"", err=True)
+        click.echo("  mitds ingest targeted-corps --province SK --from-csv ./data.csv", err=True)
+        sys.exit(1)
+
+    click.echo(f"Starting {province.upper()} targeted corporation ingestion...")
+
+    target_entities = None
+    if target:
+        target_entities = [t.strip() for t in target.split(",")]
+
+    mode = "csv" if from_csv else "web-scraping"
+
+    if verbose:
+        click.echo(f"  Province: {province.upper()}")
+        click.echo(f"  Mode: {mode}")
+        if target_entities:
+            click.echo(f"  Target entities: {target_entities}")
+        if from_csv:
+            click.echo(f"  CSV file: {from_csv}")
+        if limit:
+            click.echo(f"  Limit: {limit} records")
+
+    start_time = datetime.now()
+
+    try:
+        result = asyncio.run(
+            run_targeted_ingestion(
+                province=province,
+                target_entities=target_entities,
+                from_csv=from_csv,
+                limit=limit,
+            )
+        )
+
+        duration = (datetime.now() - start_time).total_seconds()
+
+        _print_result(result, duration, verbose)
+
+    except FileNotFoundError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+    except ValueError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        if verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
+@cli.command(name="csv-template")
+@click.option(
+    "--output",
+    type=str,
+    default=None,
+    help="Output path for CSV template (default: print to stdout)",
+)
+def generate_csv_template_cmd(
+    output: str | None,
+):
+    """Generate a CSV template for manual corporation data upload.
+
+    Creates a CSV template with the required columns for importing
+    corporation data into provinces without bulk data access.
+
+    Required columns: name, registration_number, corp_type, status
+    Optional columns: business_number, incorporation_date, street, city, province, postal_code
+
+    Examples:
+
+        # Print template to stdout
+        mitds ingest csv-template
+
+        # Save to file
+        mitds ingest csv-template --output ./my_corporations.csv
+
+        # Then import
+        mitds ingest targeted-corps --province SK --from-csv ./my_corporations.csv
+    """
+    from ..ingestion.provincial.targeted import generate_csv_template
+
+    try:
+        template = generate_csv_template(output)
+
+        if output:
+            click.echo(f"CSV template saved to: {output}")
+        else:
+            click.echo("CSV Template:")
+            click.echo("-" * 40)
+            click.echo(template)
+            click.echo("-" * 40)
+            click.echo("\nSave this template to a file, fill in your data, then import with:")
+            click.echo("  mitds ingest targeted-corps --province SK --from-csv ./your_file.csv")
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
 
@@ -1075,7 +1577,7 @@ def ingest_littlesis(
         # Test with limited records
         mitds ingest littlesis --limit 1000 --verbose
     """
-    from ..ingestion.littlesis import run_littlesis_ingestion, get_littlesis_stats
+    from ..ingestion.littlesis import get_littlesis_stats, run_littlesis_ingestion
 
     click.echo("Starting LittleSis bulk data ingestion...")
 
@@ -1096,7 +1598,7 @@ def ingest_littlesis(
                 stats = await get_littlesis_stats()
             except Exception:
                 pass
-        
+
         result = await run_littlesis_ingestion(
             entities=entities,
             relationships=relationships,
@@ -1107,9 +1609,9 @@ def ingest_littlesis(
 
     try:
         stats, result = asyncio.run(_run_with_stats())
-        
+
         if verbose and stats:
-            click.echo(f"\nPre-ingestion cache status:")
+            click.echo("\nPre-ingestion cache status:")
             click.echo(f"  Cache valid: {stats.get('cache_valid', False)}")
             click.echo(f"  Entities in DB: {stats.get('entity_count', 0)}")
             click.echo(f"  Relationships in DB: {stats.get('relationship_count', 0)}")
@@ -1141,6 +1643,7 @@ def ingest_littlesis(
 def ingestion_status():
     """Show status of all ingestion pipelines."""
     from sqlalchemy import text
+
     from ..db import get_db_session
 
     async def _get_status():
@@ -1181,7 +1684,7 @@ def ingestion_status():
                 }.get(run.status, "white")
 
                 click.echo(f"\n{source.upper()}")
-                click.echo(f"  Status: ", nl=False)
+                click.echo("  Status: ", nl=False)
                 click.secho(run.status, fg=status_color)
                 click.echo(f"  Last run: {run.completed_at or 'N/A'}")
                 click.echo(f"  Records processed: {run.records_processed or 0}")

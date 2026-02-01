@@ -64,6 +64,9 @@ dependencies = [
     # PDF Processing (SEDAR+)
     "pdfplumber>=0.10.0",
 
+    # Excel/XLSX Processing (Provincial data)
+    "openpyxl>=3.1.0",
+
     # Fuzzy Matching
     "rapidfuzz>=3.6.0",
 
