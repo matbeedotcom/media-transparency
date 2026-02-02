@@ -1860,6 +1860,232 @@ def ingest_littlesis(
         sys.exit(1)
 
 
+@cli.command(name="linkedin")
+@click.option(
+    "--company",
+    "-c",
+    type=str,
+    default=None,
+    help="Company name to filter results or search for",
+)
+@click.option(
+    "--company-url",
+    type=str,
+    default=None,
+    help="LinkedIn company URL (e.g., https://www.linkedin.com/company/postmedia)",
+)
+@click.option(
+    "--company-entity-id",
+    type=str,
+    default=None,
+    help="UUID of existing organization entity to link members to",
+)
+@click.option(
+    "--from-csv",
+    type=click.Path(exists=True),
+    help="CSV file with LinkedIn data (recommended)",
+)
+@click.option(
+    "--scrape/--no-scrape",
+    default=False,
+    help="Enable browser scraping mode (requires authentication)",
+)
+@click.option(
+    "--session-cookie",
+    type=str,
+    default=None,
+    envvar="LINKEDIN_SESSION_COOKIE",
+    help="LinkedIn li_at session cookie for authentication",
+)
+@click.option(
+    "--cookies-file",
+    type=click.Path(exists=True),
+    help="JSON file with LinkedIn cookies (exported from browser)",
+)
+@click.option(
+    "--titles",
+    type=str,
+    default=None,
+    help="Comma-separated title keywords to filter (e.g., 'CEO,Director,VP')",
+)
+@click.option(
+    "--headless/--no-headless",
+    default=True,
+    help="Run browser in headless mode (default: headless)",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum number of profiles to process",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Enable verbose output",
+)
+def ingest_linkedin(
+    company: str | None,
+    company_url: str | None,
+    company_entity_id: str | None,
+    from_csv: str | None,
+    scrape: bool,
+    session_cookie: str | None,
+    cookies_file: str | None,
+    titles: str | None,
+    headless: bool,
+    limit: int | None,
+    verbose: bool,
+):
+    """Ingest LinkedIn company members for network research.
+
+    Maps out organizational networks by extracting member data from LinkedIn.
+    Supports two primary modes:
+
+    1. CSV IMPORT (Recommended):
+       Import data exported from LinkedIn or Sales Navigator.
+       No authentication required, no rate limits.
+
+    2. BROWSER SCRAPING:
+       Automated scraping of company pages using Playwright.
+       Requires LinkedIn authentication (session cookie).
+       Use with caution - may violate LinkedIn ToS.
+
+    Creates Person nodes in Neo4j with EMPLOYED_BY relationships
+    to organizations. Executives and board members are flagged.
+
+    Examples:
+
+        # Import from CSV (recommended)
+        mitds ingest linkedin --from-csv members.csv --company "Postmedia Network"
+
+        # Import and link to existing organization entity
+        mitds ingest linkedin --from-csv members.csv --company-entity-id UUID
+
+        # Scrape company page (requires auth)
+        mitds ingest linkedin --company-url "https://linkedin.com/company/postmedia" \\
+            --scrape --session-cookie "your_li_at_cookie"
+
+        # Filter by executive titles
+        mitds ingest linkedin --from-csv members.csv --titles "CEO,CFO,Director,VP"
+
+        # Scrape with visible browser (for debugging)
+        mitds ingest linkedin --company "Corus Entertainment" --scrape --no-headless
+
+    Authentication for Scraping:
+
+        To get your LinkedIn session cookie:
+        1. Log into LinkedIn in your browser
+        2. Open Developer Tools (F12) > Application > Cookies
+        3. Find the 'li_at' cookie and copy its value
+        4. Pass via --session-cookie or LINKEDIN_SESSION_COOKIE env var
+
+        Or export all cookies as JSON and use --cookies-file
+    """
+    from ..ingestion.linkedin import run_linkedin_ingestion
+
+    if not from_csv and not scrape:
+        click.echo(
+            "Error: Must specify either --from-csv or --scrape mode",
+            err=True,
+        )
+        click.echo("\nUse --from-csv to import LinkedIn data from a CSV file", err=True)
+        click.echo("Use --scrape with --session-cookie to scrape LinkedIn directly", err=True)
+        sys.exit(1)
+
+    if scrape and not session_cookie and not cookies_file:
+        click.echo(
+            "Error: Scraping requires authentication.",
+            err=True,
+        )
+        click.echo("\nProvide LinkedIn session cookie via:", err=True)
+        click.echo("  --session-cookie 'your_li_at_cookie_value'", err=True)
+        click.echo("  or --cookies-file path/to/cookies.json", err=True)
+        click.echo("  or LINKEDIN_SESSION_COOKIE environment variable", err=True)
+        sys.exit(1)
+
+    if scrape and not company and not company_url:
+        click.echo(
+            "Error: Scraping requires --company or --company-url",
+            err=True,
+        )
+        sys.exit(1)
+
+    # Parse titles filter
+    titles_filter = None
+    if titles:
+        titles_filter = [t.strip() for t in titles.split(",")]
+
+    click.echo("Starting LinkedIn member ingestion...")
+
+    if verbose:
+        click.echo(f"  Mode: {'scraping' if scrape else 'CSV import'}")
+        if company:
+            click.echo(f"  Company: {company}")
+        if company_url:
+            click.echo(f"  Company URL: {company_url}")
+        if company_entity_id:
+            click.echo(f"  Link to entity: {company_entity_id}")
+        if from_csv:
+            click.echo(f"  CSV file: {from_csv}")
+        if titles_filter:
+            click.echo(f"  Title filter: {titles_filter}")
+        if limit:
+            click.echo(f"  Limit: {limit} profiles")
+
+    start_time = datetime.now()
+
+    try:
+        result = asyncio.run(
+            run_linkedin_ingestion(
+                csv_path=from_csv,
+                company_name=company,
+                company_url=company_url,
+                company_entity_id=company_entity_id,
+                scrape=scrape,
+                headless=headless,
+                session_cookie=session_cookie,
+                cookies_file=cookies_file,
+                titles_filter=titles_filter,
+                limit=limit,
+            )
+        )
+
+        duration = (datetime.now() - start_time).total_seconds()
+
+        click.echo("\n" + "=" * 40)
+        click.secho("LinkedIn Ingestion Complete", fg="green")
+        click.echo("=" * 40)
+        click.echo(f"Duration: {duration:.1f} seconds")
+        click.echo(f"Profiles processed: {result.get('records_processed', 0)}")
+        click.echo(f"Profiles created: {result.get('records_created', 0)}")
+        click.echo(f"Profiles updated: {result.get('records_updated', 0)}")
+
+        if result.get("errors"):
+            click.echo(f"\nErrors: {len(result['errors'])}")
+            if verbose:
+                for i, err in enumerate(result["errors"][:5], 1):
+                    click.echo(f"  {i}. {err}")
+
+    except ImportError as e:
+        click.echo(f"Error: {e}", err=True)
+        if "playwright" in str(e).lower():
+            click.echo(
+                "\nTo use LinkedIn scraping, install Playwright:",
+                err=True,
+            )
+            click.echo("  pip install playwright", err=True)
+            click.echo("  playwright install chromium", err=True)
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        if verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
 @cli.command(name="status")
 def ingestion_status():
     """Show status of all ingestion pipelines."""

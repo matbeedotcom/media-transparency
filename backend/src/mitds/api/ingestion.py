@@ -63,6 +63,19 @@ class CrossReferenceRequest(BaseModel):
     review_threshold: float = 0.85
 
 
+class LinkedInIngestionRequest(BaseModel):
+    """Request for triggering LinkedIn member ingestion."""
+
+    company_name: str | None = None  # Company name to filter/search
+    company_url: str | None = None  # LinkedIn company URL
+    company_entity_id: str | None = None  # UUID of existing org to link members to
+    csv_data: str | None = None  # Base64-encoded CSV data (for file upload)
+    scrape: bool = False  # Enable browser scraping
+    session_cookie: str | None = None  # LinkedIn li_at cookie
+    titles_filter: list[str] | None = None  # Filter by title keywords
+    limit: int | None = None
+
+
 class CrossReferenceResponse(BaseModel):
     """Response for cross-reference operation."""
 
@@ -167,7 +180,7 @@ async def get_ingestion_status(
         sources_status = []
 
         # Sources that are enabled (free, no API key required)
-        enabled_sources = ["irs990", "cra", "sec_edgar", "canada_corps", "sedar", "alberta-nonprofits"]
+        enabled_sources = ["irs990", "cra", "sec_edgar", "canada_corps", "sedar", "alberta-nonprofits", "linkedin"]
         # Sources that require API keys
         disabled_sources = ["opencorporates", "meta_ads"]
 
@@ -1008,6 +1021,317 @@ async def trigger_cross_reference(
             "review": request.review_threshold,
         },
     }
+
+
+# =========================
+# LinkedIn Member Ingestion
+# =========================
+
+
+async def _run_linkedin_ingestion_task(
+    run_id: UUID,
+    request: LinkedInIngestionRequest,
+    csv_path: str | None = None,
+):
+    """Background task to run LinkedIn ingestion."""
+    from ..ingestion.linkedin import run_linkedin_ingestion
+
+    try:
+        result = await run_linkedin_ingestion(
+            csv_path=csv_path,
+            company_name=request.company_name,
+            company_url=request.company_url,
+            company_entity_id=request.company_entity_id,
+            scrape=request.scrape,
+            session_cookie=request.session_cookie,
+            titles_filter=request.titles_filter,
+            limit=request.limit,
+            run_id=run_id,
+        )
+
+        # Update run in database
+        async with get_db_session() as db:
+            update_query = text("""
+                UPDATE ingestion_runs
+                SET status = :status,
+                    completed_at = :completed_at,
+                    records_processed = :records_processed,
+                    records_created = :records_created,
+                    records_updated = :records_updated,
+                    errors = CAST(:errors AS jsonb)
+                WHERE id = :run_id
+            """)
+
+            await db.execute(
+                update_query,
+                {
+                    "run_id": run_id,
+                    "status": result.get("status", "completed"),
+                    "completed_at": datetime.utcnow(),
+                    "records_processed": result.get("records_processed", 0),
+                    "records_created": result.get("records_created", 0),
+                    "records_updated": result.get("records_updated", 0),
+                    "errors": json.dumps(result.get("errors", []), default=str),
+                },
+            )
+            await db.commit()
+
+    except Exception as e:
+        async with get_db_session() as db:
+            error_query = text("""
+                UPDATE ingestion_runs
+                SET status = 'failed',
+                    completed_at = :completed_at,
+                    errors = CAST(:errors AS jsonb)
+                WHERE id = :run_id
+            """)
+
+            await db.execute(
+                error_query,
+                {
+                    "run_id": run_id,
+                    "completed_at": datetime.utcnow(),
+                    "errors": json.dumps([{"error": str(e), "fatal": True}]),
+                },
+            )
+            await db.commit()
+
+
+@router.post("/linkedin")
+async def trigger_linkedin_ingestion(
+    background_tasks: BackgroundTasks,
+    request: LinkedInIngestionRequest,
+    user: OptionalUser = None,
+) -> dict[str, Any]:
+    """Trigger LinkedIn member ingestion for network research.
+
+    Ingests LinkedIn member data to map out organizational networks.
+    Creates Person nodes with EMPLOYED_BY relationships.
+
+    Supports two modes:
+    1. CSV Import: Upload base64-encoded CSV data (recommended)
+    2. Browser Scraping: Scrape company pages (requires session cookie)
+
+    Args:
+        request: Ingestion configuration including:
+            - company_name: Company name to filter/search
+            - company_url: LinkedIn company URL (for scraping)
+            - company_entity_id: UUID of existing org to link members to
+            - csv_data: Base64-encoded CSV (for CSV import)
+            - scrape: Enable browser scraping mode
+            - session_cookie: LinkedIn li_at cookie (for scraping)
+            - titles_filter: Filter by title keywords (e.g., ["CEO", "Director"])
+            - limit: Maximum profiles to process
+
+    Returns:
+        Job ID and status URL for tracking
+    """
+    import base64
+    import tempfile
+
+    # Validate request
+    if not request.csv_data and not request.scrape:
+        raise ValidationError(
+            "Must provide either csv_data for import or enable scrape mode"
+        )
+
+    if request.scrape and not request.session_cookie:
+        raise ValidationError(
+            "Browser scraping requires session_cookie for LinkedIn authentication"
+        )
+
+    if request.scrape and not request.company_name and not request.company_url:
+        raise ValidationError(
+            "Scraping requires company_name or company_url"
+        )
+
+    # Handle CSV data
+    csv_path = None
+    if request.csv_data:
+        try:
+            csv_bytes = base64.b64decode(request.csv_data)
+            with tempfile.NamedTemporaryFile(
+                mode="wb", suffix=".csv", delete=False
+            ) as f:
+                f.write(csv_bytes)
+                csv_path = f.name
+        except Exception as e:
+            raise ValidationError(f"Invalid CSV data: {e}")
+
+    # Create ingestion run record
+    run_id = uuid4()
+
+    async with get_db_session() as db:
+        insert_query = text("""
+            INSERT INTO ingestion_runs (id, source, started_at, status)
+            VALUES (:id, :source, :started_at, :status)
+        """)
+
+        await db.execute(
+            insert_query,
+            {
+                "id": run_id,
+                "source": "linkedin",
+                "started_at": datetime.utcnow(),
+                "status": "running",
+            },
+        )
+        await db.commit()
+
+    # Start background task
+    background_tasks.add_task(
+        _run_linkedin_ingestion_task, run_id, request, csv_path
+    )
+
+    return {
+        "run_id": str(run_id),
+        "source": "linkedin",
+        "status": "running",
+        "status_url": f"/api/v1/ingestion/runs/{run_id}",
+        "message": f"LinkedIn ingestion started"
+        + (f" for {request.company_name}" if request.company_name else ""),
+    }
+
+
+@router.get("/linkedin/status")
+async def get_linkedin_ingestion_status(
+    user: OptionalUser = None,
+) -> dict[str, Any]:
+    """Get status of LinkedIn ingestion.
+
+    Returns the latest run information for LinkedIn member ingestion.
+    """
+    async with get_db_session() as db:
+        query = text("""
+            SELECT
+                id as run_id,
+                source,
+                status,
+                started_at,
+                completed_at,
+                records_processed,
+                records_created,
+                records_updated,
+                errors
+            FROM ingestion_runs
+            WHERE source = 'linkedin'
+            ORDER BY started_at DESC
+            LIMIT 1
+        """)
+
+        result = await db.execute(query)
+        run = result.fetchone()
+
+        if not run:
+            return {
+                "source": "linkedin",
+                "status": "never_run",
+                "last_run": None,
+            }
+
+        return {
+            "source": "linkedin",
+            "status": run.status,
+            "last_run": {
+                "run_id": str(run.run_id),
+                "status": run.status,
+                "started_at": run.started_at.isoformat() if run.started_at else None,
+                "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+                "records_processed": run.records_processed or 0,
+                "records_created": run.records_created or 0,
+                "records_updated": run.records_updated or 0,
+            },
+        }
+
+
+@router.get("/linkedin/members")
+async def get_linkedin_members(
+    company: str | None = None,
+    title: str | None = None,
+    is_executive: bool | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    user: OptionalUser = None,
+) -> dict[str, Any]:
+    """Get ingested LinkedIn members.
+
+    Args:
+        company: Filter by company name
+        title: Filter by title (partial match)
+        is_executive: Filter for executives only
+        limit: Maximum results (default: 50)
+        offset: Pagination offset
+    """
+    async with get_db_session() as db:
+        filters = ["entity_type = 'person'", "metadata->>'source' = 'linkedin'"]
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+
+        if company:
+            filters.append("metadata->>'linkedin_company' ILIKE :company")
+            params["company"] = f"%{company}%"
+
+        if title:
+            filters.append("metadata->>'linkedin_title' ILIKE :title")
+            params["title"] = f"%{title}%"
+
+        if is_executive is not None:
+            filters.append("(metadata->>'is_executive')::boolean = :is_exec")
+            params["is_exec"] = is_executive
+
+        where_clause = " AND ".join(filters)
+
+        query = text(f"""
+            SELECT
+                id,
+                name,
+                external_ids->>'linkedin_id' as linkedin_id,
+                external_ids->>'linkedin_url' as linkedin_url,
+                metadata->>'linkedin_title' as title,
+                metadata->>'linkedin_company' as company,
+                metadata->>'linkedin_location' as location,
+                (metadata->>'is_executive')::boolean as is_executive,
+                (metadata->>'is_board_member')::boolean as is_board_member,
+                (metadata->>'linkedin_connections')::int as connections,
+                created_at,
+                updated_at
+            FROM entities
+            WHERE {where_clause}
+            ORDER BY created_at DESC
+            LIMIT :limit OFFSET :offset
+        """)
+
+        result = await db.execute(query, params)
+        members = result.fetchall()
+
+        # Get total count
+        count_query = text(f"""
+            SELECT COUNT(*) as total FROM entities WHERE {where_clause}
+        """)
+        count_result = await db.execute(count_query, params)
+        total = count_result.fetchone().total
+
+        return {
+            "members": [
+                {
+                    "id": str(m.id),
+                    "name": m.name,
+                    "linkedin_id": m.linkedin_id,
+                    "linkedin_url": m.linkedin_url,
+                    "title": m.title,
+                    "company": m.company,
+                    "location": m.location,
+                    "is_executive": m.is_executive,
+                    "is_board_member": m.is_board_member,
+                    "connections": m.connections,
+                    "created_at": m.created_at.isoformat() if m.created_at else None,
+                    "updated_at": m.updated_at.isoformat() if m.updated_at else None,
+                }
+                for m in members
+            ],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
 
 
 @router.get("/provincial/cross-reference/review")

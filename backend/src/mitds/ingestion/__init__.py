@@ -51,6 +51,7 @@ from .elections_canada import ElectionsCanadaIngester, run_elections_canada_inge
 from .littlesis import LittleSisIngester, run_littlesis_ingestion, get_littlesis_stats
 from .meta_ads import MetaAdIngester, run_meta_ads_ingestion
 from .sedar import SEDARIngester, run_sedar_ingestion
+from .linkedin import LinkedInIngester, run_linkedin_ingestion
 from .search import search_all_sources, warmup_search_cache, CompanySearchResult, CompanySearchResponse
 
 __all__ = [
@@ -86,6 +87,8 @@ __all__ = [
     "run_meta_ads_ingestion",
     "SEDARIngester",
     "run_sedar_ingestion",
+    "LinkedInIngester",
+    "run_linkedin_ingestion",
     "search_all_sources",
     "warmup_search_cache",
     "CompanySearchResult",
