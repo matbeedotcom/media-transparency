@@ -15,10 +15,14 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { path: '/', label: 'Dashboard', icon: '📊' },
+  { path: '/cases', label: 'Cases', icon: '🔬' },
+  { path: '/ingestion', label: 'Ingestion', icon: '📥' },
   { path: '/entities', label: 'Entity Explorer', icon: '🔍' },
   { path: '/detection', label: 'Detection', icon: '🎯' },
+  { path: '/resolution', label: 'Resolution', icon: '🔗' },
   { path: '/reports', label: 'Reports', icon: '📄' },
   { path: '/validation', label: 'Validation', icon: '✅' },
+  { path: '/settings', label: 'Settings', icon: '⚙️' },
 ];
 
 export default function Layout() {
@@ -47,9 +51,7 @@ export default function Layout() {
           ))}
         </nav>
         <div className="header-actions">
-          <button className="btn btn-secondary">
-            Settings
-          </button>
+          {/* Reserved for user menu / auth */}
         </div>
       </header>
 

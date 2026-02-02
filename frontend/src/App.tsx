@@ -5,17 +5,31 @@ import EntityExplorer from './pages/EntityExplorer';
 import DetectionResults from './pages/DetectionResults';
 import ReportGenerator from './pages/ReportGenerator';
 import ValidationDashboard from './pages/ValidationDashboard';
+import EntityResolution from './pages/EntityResolution';
+import IngestionPage from './pages/IngestionPage';
+import SettingsPage from './pages/SettingsPage';
+import CaseCreate from './pages/CaseCreate';
+import CaseDetail from './pages/CaseDetail';
+import ReviewQueue from './pages/ReviewQueue';
 
 function App() {
   return (
     <Routes>
       <Route path="/" element={<Layout />}>
         <Route index element={<Dashboard />} />
+        <Route path="ingestion" element={<IngestionPage />} />
         <Route path="entities" element={<EntityExplorer />} />
         <Route path="entities/:id" element={<EntityExplorer />} />
         <Route path="detection" element={<DetectionResults />} />
         <Route path="reports" element={<ReportGenerator />} />
         <Route path="validation" element={<ValidationDashboard />} />
+        <Route path="resolution" element={<EntityResolution />} />
+        <Route path="settings" element={<SettingsPage />} />
+        {/* Cases - Autonomous Research */}
+        <Route path="cases" element={<CaseCreate />} />
+        <Route path="cases/new" element={<CaseCreate />} />
+        <Route path="cases/:id" element={<CaseDetail />} />
+        <Route path="cases/:id/review" element={<ReviewQueue />} />
       </Route>
     </Routes>
   );

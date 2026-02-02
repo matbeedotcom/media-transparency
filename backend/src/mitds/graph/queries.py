@@ -4,6 +4,12 @@ Provides query functions for:
 - Funding path traversal
 - Entity relationship queries
 - Multi-hop path finding
+
+Performance Notes:
+- All queries are designed to use Neo4j indexes on id, name, and external IDs
+- Variable-length paths use LIMIT to prevent explosion
+- Aggregations use DISTINCT to reduce memory usage
+- Temporal filters should use indexed properties (valid_from, valid_to, fiscal_year)
 """
 
 from datetime import datetime
@@ -13,10 +19,17 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from ..db import get_neo4j_session
-from ..logging import get_context_logger
+from ..logging import get_context_logger, log_graph_operation
 from ..models.relationships import RelationType
 
 logger = get_context_logger(__name__)
+
+
+# Query timeout in seconds
+QUERY_TIMEOUT = 30
+
+# Maximum results for variable-length path queries
+MAX_PATH_RESULTS = 100
 
 
 class EntityNode(BaseModel):
@@ -87,7 +100,7 @@ async def get_funding_paths(
 
         query = f"""
         MATCH path = (funder {{id: $funder_id}})<-[:FUNDED_BY*1..{max_hops}]-(recipient)
-        WITH path, [r IN relationships(path) | r] as rels
+        WITH path, funder, recipient, [r IN relationships(path) | r] as rels
         WHERE true {amount_filter} {year_filter}
         RETURN
             funder,
@@ -273,6 +286,106 @@ async def find_shared_funders(
             )
 
         return clusters
+
+
+class BoardInterlockCluster(BaseModel):
+    """A cluster of organizations sharing a common director."""
+
+    shared_director: EntityNode
+    organizations: list[EntityNode]
+    org_count: int
+
+
+async def find_shared_directors(
+    entity_ids: list[UUID],
+    min_shared: int = 2,
+) -> list[BoardInterlockCluster]:
+    """Find directors shared by multiple entities (board interlocks).
+
+    Args:
+        entity_ids: List of organization entity IDs to check
+        min_shared: Minimum number of organizations sharing a director
+
+    Returns:
+        List of board interlock clusters
+    """
+    if len(entity_ids) < 2:
+        return []
+
+    async with get_neo4j_session() as session:
+        query = """
+        UNWIND $entity_ids as eid
+        MATCH (org {id: eid})<-[:DIRECTOR_OF]-(person:Person)
+        WITH person, collect(DISTINCT org) as orgs
+        WHERE size(orgs) >= $min_shared
+        RETURN person, orgs
+        ORDER BY size(orgs) DESC
+        """
+
+        result = await session.run(
+            query,
+            entity_ids=[str(eid) for eid in entity_ids],
+            min_shared=min_shared,
+        )
+        records = await result.data()
+
+        clusters = []
+        for record in records:
+            director_node = _parse_entity_node(record["person"])
+            org_nodes = [
+                _parse_entity_node(o) for o in record.get("orgs", [])
+            ]
+
+            clusters.append(
+                BoardInterlockCluster(
+                    shared_director=director_node,
+                    organizations=org_nodes,
+                    org_count=len(org_nodes),
+                )
+            )
+
+        return clusters
+
+
+async def find_board_interlocks_for_entity(
+    entity_id: UUID,
+) -> list[dict[str, Any]]:
+    """Find board interlocks for a specific entity.
+
+    Returns directors of this entity who also serve on other boards,
+    along with those other organizations.
+
+    Args:
+        entity_id: ID of the organization entity
+
+    Returns:
+        List of dicts with 'director' and 'organizations' keys
+    """
+    async with get_neo4j_session() as session:
+        query = """
+        MATCH (org {id: $entity_id})<-[:DIRECTOR_OF]-(person:Person)-[:DIRECTOR_OF]->(other:Organization)
+        WHERE other.id <> $entity_id
+        WITH person, collect(DISTINCT other) as other_orgs
+        RETURN person, other_orgs
+        ORDER BY size(other_orgs) DESC
+        """
+
+        result = await session.run(query, entity_id=str(entity_id))
+        records = await result.data()
+
+        interlocks = []
+        for record in records:
+            director_node = _parse_entity_node(record["person"])
+            org_nodes = [
+                _parse_entity_node(o) for o in record.get("other_orgs", [])
+            ]
+
+            interlocks.append({
+                "director": director_node,
+                "organizations": org_nodes,
+            })
+
+        return interlocks
 
 
 async def get_entity_relationships(
@@ -709,3 +822,28 @@ def _parse_relationship_edge(rel_data: Any) -> RelationshipEdge:
         target_id=UUID(target_id) if target_id else UUID(int=0),
         properties=props,
     )
+
+
+class GraphQueries:
+    """Client for executing arbitrary Cypher queries against Neo4j.
+
+    Provides a simple interface for running custom queries, primarily
+    used by the report generator for dynamic queries.
+    """
+
+    async def execute(
+        self, query: str, params: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
+        """Execute a Cypher query and return results as dictionaries.
+
+        Args:
+            query: Cypher query string
+            params: Query parameters
+
+        Returns:
+            List of result records as dictionaries
+        """
+        async with get_neo4j_session() as session:
+            result = await session.run(query, **(params or {}))
+            records = await result.data()
+            return records or []

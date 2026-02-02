@@ -295,6 +295,149 @@ def queue_stats():
         sys.exit(1)
 
 
+@cli.command(name="run")
+@click.option(
+    "--entity-type",
+    type=click.Choice(["Organization", "Person", "Outlet", "all"]),
+    default="all",
+    help="Entity type to resolve",
+)
+@click.option(
+    "--auto-merge-threshold",
+    type=float,
+    default=0.95,
+    help="Confidence threshold for automatic merging (default: 0.95)",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Find candidates without merging",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Show detailed output",
+)
+def run_resolution(
+    entity_type: str,
+    auto_merge_threshold: float,
+    dry_run: bool,
+    verbose: bool,
+):
+    """Run entity resolution across all entities.
+
+    Finds potential duplicates using deterministic and fuzzy matching,
+    then either auto-merges high-confidence matches or queues them
+    for human review.
+
+    Examples:
+
+        # Dry run to see candidates
+        mitds resolve run --dry-run --verbose
+
+        # Run resolution for organizations only
+        mitds resolve run --entity-type Organization
+
+        # Lower auto-merge threshold
+        mitds resolve run --auto-merge-threshold 0.90
+
+        # Full run with verbose output
+        mitds resolve run --verbose
+    """
+    from ..resolution.resolver import EntityResolver
+    from ..resolution.reconcile import ReconciliationQueue
+
+    entity_types = (
+        ["Organization", "Person", "Outlet"]
+        if entity_type == "all"
+        else [entity_type]
+    )
+
+    async def _run():
+        resolver = EntityResolver(
+            auto_merge_threshold=auto_merge_threshold,
+        )
+
+        total_candidates = 0
+        total_auto_merged = 0
+        total_queued = 0
+
+        for etype in entity_types:
+            click.echo(f"\nResolving {etype} entities...")
+
+            duplicates = await resolver.find_duplicates(etype)
+
+            if not duplicates:
+                click.echo(f"  No duplicates found for {etype}")
+                continue
+
+            click.echo(f"  Found {len(duplicates)} potential duplicates")
+            total_candidates += len(duplicates)
+
+            for dup in duplicates:
+                if verbose:
+                    click.echo(
+                        f"    {dup.source_id} <-> {dup.target_id} "
+                        f"(confidence: {dup.confidence:.2f}, "
+                        f"strategy: {dup.strategy.value if dup.strategy else 'unknown'})"
+                    )
+
+                if dry_run:
+                    continue
+
+                if dup.confidence >= auto_merge_threshold:
+                    # Auto-merge
+                    merged = await resolver.merge_entities(
+                        dup.source_id,
+                        dup.target_id,
+                        user_id="system:auto-resolve",
+                    )
+                    if merged:
+                        total_auto_merged += 1
+                        if verbose:
+                            click.echo(
+                                f"      -> Auto-merged (confidence: {dup.confidence:.2f})"
+                            )
+                else:
+                    # Queue for review
+                    queue = ReconciliationQueue()
+                    await queue.create_task(
+                        source_entity_id=dup.source_id,
+                        candidate_entity_id=dup.target_id,
+                        match_confidence=dup.confidence,
+                        match_strategy=dup.strategy,
+                        match_details=dup.match_details,
+                    )
+                    total_queued += 1
+                    if verbose:
+                        click.echo(
+                            f"      -> Queued for review (confidence: {dup.confidence:.2f})"
+                        )
+
+        return total_candidates, total_auto_merged, total_queued
+
+    try:
+        candidates, merged, queued = asyncio.run(_run())
+
+        click.echo("\n" + "=" * 50)
+        click.echo("Resolution Summary")
+        click.echo("=" * 50)
+        click.echo(f"  Candidates found: {candidates}")
+        if not dry_run:
+            click.echo(f"  Auto-merged: {merged}")
+            click.echo(f"  Queued for review: {queued}")
+        else:
+            click.echo("  (dry run - no changes made)")
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        if verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
 @cli.command(name="match")
 @click.option(
     "--source-id",
@@ -478,6 +621,160 @@ def find_matches(
     except ValueError as e:
         click.echo(f"Invalid entity ID: {e}", err=True)
         sys.exit(1)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        if verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
+@cli.command(name="cross-border")
+@click.option(
+    "--country",
+    type=str,
+    default="CA",
+    help="Target country code (default: CA for Canada)",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=100,
+    help="Maximum grants to process",
+)
+@click.option(
+    "--auto-merge-threshold",
+    type=float,
+    default=0.9,
+    help="Confidence threshold for automatic merging (default: 0.9)",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Find candidates without merging",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Show detailed output",
+)
+def cross_border_resolution(
+    country: str,
+    limit: int,
+    auto_merge_threshold: float,
+    dry_run: bool,
+    verbose: bool,
+):
+    """Run cross-border entity resolution.
+
+    Links foreign grant recipients (from IRS 990 Schedule I) to known
+    entities in target countries (e.g., CRA charities in Canada).
+
+    Examples:
+
+        # Dry run to see what would be matched
+        mitds resolve cross-border --dry-run --verbose
+
+        # Run resolution for Canadian recipients
+        mitds resolve cross-border --country CA
+
+        # Process more grants with lower threshold
+        mitds resolve cross-border --limit 500 --auto-merge-threshold 0.85
+
+        # Full run with verbose output
+        mitds resolve cross-border --verbose
+    """
+    from ..resolution.cross_border import CrossBorderResolver
+
+    async def _run():
+        resolver = CrossBorderResolver(
+            auto_merge_threshold=auto_merge_threshold,
+        )
+
+        # Find unresolved grants
+        grants = await resolver.find_unresolved_grants(
+            target_country=country,
+            limit=limit,
+        )
+
+        if not grants:
+            click.echo(f"No unresolved grants found for {country}")
+            return None, []
+
+        click.echo(f"\nFound {len(grants)} unresolved grants to {country}")
+
+        if dry_run:
+            click.echo("\n(Dry run - no changes will be made)")
+
+        results = []
+        for grant in grants:
+            result = await resolver.resolve_grant(
+                grant,
+                auto_merge=not dry_run,
+            )
+            results.append(result)
+
+            if verbose:
+                status_colors = {
+                    "auto_merged": "green",
+                    "queued_for_review": "yellow",
+                    "no_match": "red",
+                }
+
+                click.echo(f"\n  {grant.recipient_name}")
+                click.echo(f"    Location: {grant.recipient_city}, {grant.recipient_state}")
+                if grant.funder_name:
+                    click.echo(f"    Funder: {grant.funder_name}")
+                if grant.amount:
+                    click.echo(f"    Amount: ${grant.amount:,.0f}")
+
+                if result.matched_entity_name:
+                    click.echo(f"    Match: {result.matched_entity_name}")
+                    click.echo(f"    BN: {result.matched_entity_bn or 'N/A'}")
+                    click.echo(f"    Confidence: {result.confidence:.2f}")
+
+                click.echo("    Action: ", nl=False)
+                click.secho(
+                    result.action,
+                    fg=status_colors.get(result.action, "white"),
+                )
+
+        # Calculate stats
+        stats = {
+            "total": len(results),
+            "auto_merged": sum(1 for r in results if r.action == "auto_merged"),
+            "queued": sum(1 for r in results if r.action == "queued_for_review"),
+            "no_match": sum(1 for r in results if r.action == "no_match"),
+        }
+
+        return stats, results
+
+    try:
+        stats, results = asyncio.run(_run())
+
+        if stats is None:
+            return
+
+        click.echo("\n" + "=" * 50)
+        click.echo("Cross-Border Resolution Summary")
+        click.echo("=" * 50)
+        click.echo(f"  Target Country: {country}")
+        click.echo(f"  Total Processed: {stats['total']}")
+
+        if not dry_run:
+            click.echo(f"  Auto-Merged: ", nl=False)
+            click.secho(str(stats['auto_merged']), fg="green")
+            click.echo(f"  Queued for Review: ", nl=False)
+            click.secho(str(stats['queued']), fg="yellow")
+            click.echo(f"  No Match: ", nl=False)
+            click.secho(str(stats['no_match']), fg="red")
+        else:
+            matches = stats['auto_merged'] + stats['queued']
+            click.echo(f"  Would Match: {matches}")
+            click.echo(f"  No Match: {stats['no_match']}")
+            click.echo("\n  (dry run - no changes made)")
+
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         if verbose:

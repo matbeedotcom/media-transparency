@@ -194,7 +194,8 @@ class EntityResolver:
             MATCH (e:{entity_type})
             RETURN e.id as id, e.name as name, e.ein as ein, e.bn as bn,
                    e.opencorp_id as opencorp_id,
-                   e.address_city as city, e.address_state as state
+                   e.address_city as city, e.address_state as state,
+                   e.address_country as country, e.address_postal as postal
             LIMIT 10000
             """
             result = await session.run(query)
@@ -211,11 +212,15 @@ class EntityResolver:
                 if record.get("opencorp_id"):
                     identifiers["opencorp_id"] = record["opencorp_id"]
 
-                attributes = {}
-                if record.get("city"):
-                    attributes["city"] = record["city"]
-                if record.get("state"):
-                    attributes["state"] = record["state"]
+                # Build address dict for location matching
+                attributes = {
+                    "address": {
+                        "city": record.get("city"),
+                        "state": record.get("state"),
+                        "country": record.get("country"),
+                        "postal_code": record.get("postal"),
+                    }
+                }
 
                 candidates.append(
                     MatchCandidate(
@@ -398,7 +403,8 @@ async def resolve_entity(
         MATCH (e:{entity_type})
         RETURN e.id as id, e.name as name, e.ein as ein, e.bn as bn,
                e.opencorp_id as opencorp_id,
-               e.address_city as city, e.address_state as state
+               e.address_city as city, e.address_state as state,
+               e.address_country as country, e.address_postal as postal
         LIMIT 10000
         """
         result = await session.run(query)
@@ -415,11 +421,15 @@ async def resolve_entity(
                 if record.get("opencorp_id"):
                     idents["opencorp_id"] = record["opencorp_id"]
 
-                attrs = {}
-                if record.get("city"):
-                    attrs["city"] = record["city"]
-                if record.get("state"):
-                    attrs["state"] = record["state"]
+                # Build address dict for location matching
+                attrs = {
+                    "address": {
+                        "city": record.get("city"),
+                        "state": record.get("state"),
+                        "country": record.get("country"),
+                        "postal_code": record.get("postal"),
+                    }
+                }
 
                 candidates.append(
                     MatchCandidate(

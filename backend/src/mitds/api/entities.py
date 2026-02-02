@@ -12,6 +12,7 @@ from .auth import CurrentUser, OptionalUser
 from ..db import get_neo4j_session
 from ..graph.queries import get_entity_relationships as graph_get_relationships
 from ..graph.queries import get_entity_stats
+from ..graph.queries import find_board_interlocks_for_entity
 from ..models.base import EntityType, EntitySummary
 from ..models.relationships import RelationType
 
@@ -41,11 +42,10 @@ class RelationshipResponse(BaseModel):
 
     id: UUID | None
     rel_type: str
-    source_id: UUID
-    target_id: UUID
+    source_entity: EntitySummary
+    target_entity: EntitySummary
     confidence: float
     properties: dict[str, Any] = Field(default_factory=dict)
-    related_entity: EntitySummary
 
 
 class EvidenceResponse(BaseModel):
@@ -95,12 +95,14 @@ async def search_entities(
             # Search with text matching
             search_query = f"""
             MATCH (e)
-            WHERE (e:Organization OR e:Person OR e:Outlet OR e:Sponsor)
+            WHERE (e:Organization OR e:Person OR e:Outlet OR e:Sponsor OR e:Ad)
             AND (
                 toLower(e.name) CONTAINS toLower($search_term)
+                OR toLower(e.page_name) CONTAINS toLower($search_term)
                 OR any(alias IN coalesce(e.aliases, []) WHERE toLower(alias) CONTAINS toLower($search_term))
                 OR e.ein = $search_term
                 OR e.bn = $search_term
+                OR e.meta_ad_id = $search_term
             )
             {type_filter}
             {jurisdiction_filter}
@@ -112,12 +114,14 @@ async def search_entities(
 
             count_query = f"""
             MATCH (e)
-            WHERE (e:Organization OR e:Person OR e:Outlet OR e:Sponsor)
+            WHERE (e:Organization OR e:Person OR e:Outlet OR e:Sponsor OR e:Ad)
             AND (
                 toLower(e.name) CONTAINS toLower($search_term)
+                OR toLower(e.page_name) CONTAINS toLower($search_term)
                 OR any(alias IN coalesce(e.aliases, []) WHERE toLower(alias) CONTAINS toLower($search_term))
                 OR e.ein = $search_term
                 OR e.bn = $search_term
+                OR e.meta_ad_id = $search_term
             )
             {type_filter}
             {jurisdiction_filter}
@@ -132,7 +136,7 @@ async def search_entities(
             # List all entities
             list_query = f"""
             MATCH (e)
-            WHERE (e:Organization OR e:Person OR e:Outlet OR e:Sponsor)
+            WHERE (e:Organization OR e:Person OR e:Outlet OR e:Sponsor OR e:Ad)
             {type_filter.replace('AND', 'AND' if type_filter else '')}
             {jurisdiction_filter.replace('AND', 'AND' if jurisdiction_filter else '')}
             RETURN e
@@ -143,7 +147,7 @@ async def search_entities(
 
             count_query = f"""
             MATCH (e)
-            WHERE (e:Organization OR e:Person OR e:Outlet OR e:Sponsor)
+            WHERE (e:Organization OR e:Person OR e:Outlet OR e:Sponsor OR e:Ad)
             {type_filter.replace('AND', 'AND' if type_filter else '')}
             {jurisdiction_filter.replace('AND', 'AND' if jurisdiction_filter else '')}
             RETURN count(e) as total
@@ -166,10 +170,13 @@ async def search_entities(
             elif hasattr(created_at, 'isoformat'):
                 created_at = created_at.isoformat()
 
+            # Handle Ad nodes which use page_name instead of name
+            name = entity_data.get("name") or entity_data.get("page_name") or f"Ad {entity_data.get('meta_ad_id', 'Unknown')}"
+
             entities.append({
                 "id": entity_data.get("id"),
                 "entity_type": entity_data.get("entity_type"),
-                "name": entity_data.get("name"),
+                "name": name,
                 "confidence": entity_data.get("confidence", 1.0),
                 "created_at": created_at,
             })
@@ -206,22 +213,26 @@ async def get_entity(
 
         entity_data = dict(record["e"])
 
-        # Parse timestamps
+        # Parse timestamps - handle neo4j.time.DateTime, str, and None
         created_at = entity_data.get("created_at")
-        if isinstance(created_at, str):
+        if hasattr(created_at, 'to_native'):
+            created_at = created_at.to_native()
+        elif isinstance(created_at, str):
             created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
         elif created_at is None:
             created_at = datetime.utcnow()
 
         updated_at = entity_data.get("updated_at")
-        if isinstance(updated_at, str):
+        if hasattr(updated_at, 'to_native'):
+            updated_at = updated_at.to_native()
+        elif isinstance(updated_at, str):
             updated_at = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
         elif updated_at is None:
             updated_at = created_at
 
         # Extract known fields
         known_fields = {
-            "id", "entity_type", "name", "confidence", "created_at",
+            "id", "entity_type", "name", "page_name", "confidence", "created_at",
             "updated_at", "aliases"
         }
         properties = {
@@ -229,10 +240,13 @@ async def get_entity(
             if k not in known_fields and v is not None
         }
 
+        # Handle Ad nodes which use page_name instead of name
+        name = entity_data.get("name") or entity_data.get("page_name") or "Unknown"
+
         return EntityResponse(
             id=UUID(entity_data["id"]),
             entity_type=entity_data.get("entity_type", "UNKNOWN"),
-            name=entity_data.get("name", "Unknown"),
+            name=name,
             confidence=entity_data.get("confidence", 1.0),
             created_at=created_at,
             updated_at=updated_at,
@@ -293,16 +307,18 @@ async def get_entity_relationships(
         WHERE entity.id = $entity_id
         {type_filter}
         {time_filter}
+        WITH r, startNode(r) as src, endNode(r) as tgt
         RETURN
             r.id as rel_id,
             type(r) as rel_type,
-            startNode(r).id as source_id,
-            endNode(r).id as target_id,
+            src.id as source_id,
+            src.name as source_name,
+            src.entity_type as source_type,
+            tgt.id as target_id,
+            tgt.name as target_name,
+            tgt.entity_type as target_type,
             r.confidence as confidence,
-            properties(r) as rel_props,
-            related.id as related_id,
-            related.entity_type as related_type,
-            related.name as related_name
+            properties(r) as rel_props
         LIMIT {limit}
         """
 
@@ -312,20 +328,46 @@ async def get_entity_relationships(
         relationships = []
         for record in records:
             rel_props = record.get("rel_props", {})
+            # Remove internal Neo4j props from rel_props
+            for key in ("id", "confidence"):
+                rel_props.pop(key, None)
+
+            # Parse relationship ID - may not be a valid UUID
+            rel_id = None
+            if record.get("rel_id"):
+                try:
+                    rel_id = UUID(str(record["rel_id"]))
+                except ValueError:
+                    rel_id = None
+
+            # Parse entity IDs - skip relationships with invalid UUIDs
+            try:
+                source_id = UUID(str(record["source_id"])) if record.get("source_id") else None
+                target_id = UUID(str(record["target_id"])) if record.get("target_id") else None
+            except ValueError:
+                # Skip relationships where entity IDs aren't valid UUIDs
+                continue
+
+            if source_id is None or target_id is None:
+                # Skip relationships with missing entity IDs
+                continue
 
             relationships.append(
                 RelationshipResponse(
-                    id=UUID(record["rel_id"]) if record.get("rel_id") else None,
+                    id=rel_id,
                     rel_type=record.get("rel_type", ""),
-                    source_id=UUID(record["source_id"]),
-                    target_id=UUID(record["target_id"]),
+                    source_entity=EntitySummary(
+                        id=source_id,
+                        entity_type=EntityType(record.get("source_type", "ORGANIZATION")),
+                        name=record.get("source_name", "Unknown"),
+                    ),
+                    target_entity=EntitySummary(
+                        id=target_id,
+                        entity_type=EntityType(record.get("target_type", "ORGANIZATION")),
+                        name=record.get("target_name", "Unknown"),
+                    ),
                     confidence=record.get("confidence") or 1.0,
                     properties=rel_props,
-                    related_entity=EntitySummary(
-                        id=UUID(record["related_id"]),
-                        entity_type=EntityType(record.get("related_type", "ORGANIZATION")),
-                        name=record.get("related_name", "Unknown"),
-                    ),
                 )
             )
 
@@ -433,3 +475,43 @@ async def get_entity_statistics(
         raise NotFoundError("Entity", entity_id)
 
     return stats
+
+
+# =========================
+# Get Board Interlocks
+# =========================
+
+
+@router.get("/{entity_id}/board-interlocks")
+async def get_board_interlocks(
+    entity_id: UUID,
+    user: OptionalUser = None,
+):
+    """Get board interlocks for an organization.
+
+    Returns directors of this entity who also serve on other boards,
+    along with those other organizations.
+    """
+    interlocks = await find_board_interlocks_for_entity(entity_id)
+
+    return {
+        "interlocks": [
+            {
+                "director": {
+                    "id": str(item["director"].id),
+                    "entity_type": item["director"].entity_type,
+                    "name": item["director"].name,
+                },
+                "organizations": [
+                    {
+                        "id": str(org.id),
+                        "entity_type": org.entity_type,
+                        "name": org.name,
+                    }
+                    for org in item["organizations"]
+                ],
+            }
+            for item in interlocks
+        ],
+        "total": len(interlocks),
+    }

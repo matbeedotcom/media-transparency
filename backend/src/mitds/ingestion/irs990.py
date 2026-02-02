@@ -37,9 +37,11 @@ from .base import BaseIngester, IngestionConfig, with_retry, RetryConfig
 
 logger = get_context_logger(__name__)
 
-# IRS 990 S3 bucket base URL (public, no auth required)
-IRS_990_BASE_URL = "https://s3.amazonaws.com/irs-form-990"
-IRS_990_INDEX_URL = f"{IRS_990_BASE_URL}/index_{{year}}.json"
+# IRS 990 data URLs (moved from deprecated S3 to IRS direct downloads)
+# See: https://www.irs.gov/charities-non-profits/form-990-series-downloads
+IRS_990_BASE_URL = "https://apps.irs.gov/pub/epostcard/990/xml"
+IRS_990_INDEX_URL = f"{IRS_990_BASE_URL}/{{year}}/index_{{year}}.csv"
+# Monthly ZIP files follow pattern: {year}/{year}_TEOS_XML_{month}A.zip
 
 # XML namespaces used in 990 filings
 NS = {
@@ -125,11 +127,12 @@ class IRS990Ingester(BaseIngester[IRS990Filing]):
     async def fetch_records(
         self, config: IngestionConfig
     ) -> AsyncIterator[IRS990Filing]:
-        """Fetch IRS 990 filings from AWS S3.
+        """Fetch IRS 990 filings from IRS bulk downloads.
 
-        Downloads the index for specified years and yields parsed filings.
+        Downloads monthly ZIP files and extracts XML filings.
         """
-        settings = get_settings()
+        import io
+        from zipfile import ZipFile
 
         # Determine years to process
         current_year = datetime.now().year
@@ -138,56 +141,174 @@ class IRS990Ingester(BaseIngester[IRS990Filing]):
 
         for year in range(start_year, end_year + 1):
             self.logger.info(f"Processing year {year}")
+            print(f"Processing year {year}")  # Direct output for visibility
 
-            # Fetch index for this year
+            # Build index lookup for metadata
             index_entries = await self._fetch_index(year)
-            self.logger.info(f"Found {len(index_entries)} filings for {year}")
+            self.logger.info(f"Found {len(index_entries)} entries in index")
+            print(f"Found {len(index_entries)} entries in index")
 
-            # Apply date filter if incremental
-            if config.date_from:
-                # Filter by tax period (YYYYMM)
-                min_period = config.date_from.strftime("%Y%m")
-                index_entries = [
-                    e for e in index_entries if e.tax_period >= min_period
-                ]
-                self.logger.info(
-                    f"After date filter: {len(index_entries)} filings"
-                )
+            # Create lookup by object_id
+            index_lookup = {e.object_id: e for e in index_entries}
 
-            # Process each filing
-            for entry in index_entries:
+            # Filter by target entities (EINs) if specified
+            target_eins = None
+            if config.target_entities:
+                target_eins = {
+                    ein.replace("-", "") for ein in config.target_entities
+                }
+                self.logger.info(f"Filtering to {len(target_eins)} target EINs")
+
+            # Download and process monthly ZIP files
+            records_yielded = 0
+            for month in range(1, 13):
+                if config.limit and records_yielded >= config.limit:
+                    break
+
+                zip_url = f"{IRS_990_BASE_URL}/{year}/{year}_TEOS_XML_{month:02d}A.zip"
+                self.logger.info(f"Downloading {zip_url}")
+                print(f"Downloading month {month:02d}...")
+
                 try:
-                    filing = await self._download_and_parse(entry)
-                    if filing:
-                        yield filing
+                    zip_content = await self._download_zip(zip_url)
+                    if not zip_content:
+                        continue
+
+                    # Extract and process XMLs from ZIP
+                    with ZipFile(io.BytesIO(zip_content)) as zf:
+                        xml_files = [n for n in zf.namelist() if n.endswith('.xml')]
+                        self.logger.info(f"  Found {len(xml_files)} XML files in ZIP")
+                        print(f"  Found {len(xml_files)} XML files")
+
+                        for xml_name in xml_files:
+                            if config.limit and records_yielded >= config.limit:
+                                break
+
+                            try:
+                                xml_content = zf.read(xml_name)
+
+                                # Extract object_id from filename (e.g., "202340189349301104_public.xml")
+                                object_id = xml_name.replace("_public.xml", "").replace(".xml", "")
+
+                                # Get metadata from index
+                                entry = index_lookup.get(object_id)
+                                if not entry:
+                                    # Create minimal entry from filename
+                                    entry = IRS990IndexEntry(
+                                        OBJECT_ID=object_id,
+                                        EIN="",
+                                        TAX_PERIOD=str(year) + "12",
+                                        TAXPAYER_NAME="",
+                                        RETURN_TYPE="990",
+                                        URL="",
+                                    )
+
+                                # Apply EIN filter if specified
+                                if target_eins and entry.ein.replace("-", "") not in target_eins:
+                                    continue
+
+                                # Parse the XML
+                                filing = await asyncio.to_thread(
+                                    self._parse_990_xml, xml_content, entry
+                                )
+                                if filing:
+                                    records_yielded += 1
+                                    yield filing
+
+                            except Exception as e:
+                                self.logger.warning(f"Failed to process {xml_name}: {e}")
+                                continue
+
                 except Exception as e:
-                    self.logger.warning(
-                        f"Failed to process {entry.object_id}: {e}"
-                    )
+                    self.logger.warning(f"Failed to download/process {zip_url}: {e}")
+                    print(f"  Error: {e}")
                     continue
 
+            self.logger.info(f"Completed year {year}: {records_yielded} records")
+            print(f"Completed year {year}: {records_yielded} records")
+
     async def _fetch_index(self, year: int) -> list[IRS990IndexEntry]:
-        """Fetch the index file for a given year."""
+        """Fetch the index file for a given year.
+
+        The IRS provides index files in CSV format at:
+        https://apps.irs.gov/pub/epostcard/990/xml/{year}/index_{year}.csv
+        """
+        import csv
+        import io
+
         url = IRS_990_INDEX_URL.format(year=year)
+        self.logger.info(f"Fetching index from: {url}")
 
         async def _do_fetch():
             response = await self.http_client.get(url)
             response.raise_for_status()
-            return response.json()
+            return response.text
 
-        data = await with_retry(_do_fetch, logger=self.logger)
+        try:
+            csv_content = await with_retry(_do_fetch, logger=self.logger)
+        except Exception as e:
+            self.logger.warning(f"Failed to fetch index for {year}: {e}")
+            return []
 
         entries = []
-        for item in data.get("Filings" + str(year), data.get("Filings", [])):
+        reader = csv.DictReader(io.StringIO(csv_content))
+
+        for row in reader:
             try:
-                entry = IRS990IndexEntry.model_validate(item)
+                # Map CSV columns to our model
+                # CSV columns: RETURN_ID, FILING_TYPE, EIN, TAX_PERIOD, SUB_DATE, TAXPAYER_NAME, RETURN_TYPE, DLN, OBJECT_ID
+                object_id = row.get("OBJECT_ID", row.get("RETURN_ID", ""))
+                ein = row.get("EIN", "")
+                tax_period = row.get("TAX_PERIOD", "")
+                taxpayer_name = row.get("TAXPAYER_NAME", "")
+                return_type = row.get("RETURN_TYPE", "")
+
+                if not object_id or not ein:
+                    continue
+
+                # Build URL to the XML file (if not provided in CSV)
+                xml_url = row.get("URL", "")
+                if not xml_url:
+                    # Construct URL based on object_id pattern
+                    xml_url = f"{IRS_990_BASE_URL}/{year}/{object_id}_public.xml"
+
+                entry = IRS990IndexEntry(
+                    OBJECT_ID=object_id,
+                    EIN=ein,
+                    TAX_PERIOD=tax_period,
+                    TAXPAYER_NAME=taxpayer_name,
+                    RETURN_TYPE=return_type,
+                    URL=xml_url,
+                )
+
                 # Only process 990, 990EZ, 990PF forms
                 if entry.return_type in ("990", "990EZ", "990PF"):
                     entries.append(entry)
             except Exception as e:
                 self.logger.debug(f"Skipping invalid index entry: {e}")
 
+        self.logger.info(f"Parsed {len(entries)} entries from index")
         return entries
+
+    async def _download_zip(self, url: str) -> bytes | None:
+        """Download a monthly ZIP file."""
+
+        async def _do_download():
+            response = await self.http_client.get(url)
+            response.raise_for_status()
+            return response.content
+
+        try:
+            content = await with_retry(
+                _do_download,
+                config=RetryConfig(max_retries=2, base_delay=5.0),
+                logger=self.logger,
+            )
+            self.logger.info(f"  Downloaded {len(content) // 1024 // 1024}MB")
+            return content
+        except Exception as e:
+            self.logger.warning(f"  Failed to download ZIP: {e}")
+            return None
 
     async def _download_and_parse(
         self, entry: IRS990IndexEntry
@@ -207,7 +328,8 @@ class IRS990Ingester(BaseIngester[IRS990Filing]):
             entry.object_id,
             extension="xml",
         )
-        self.storage.upload_file(
+        await asyncio.to_thread(
+            self.storage.upload_file,
             xml_content,
             storage_key,
             content_type="application/xml",
@@ -218,8 +340,8 @@ class IRS990Ingester(BaseIngester[IRS990Filing]):
             },
         )
 
-        # Parse XML
-        return self._parse_990_xml(xml_content, entry)
+        # Parse XML (offload CPU-bound work to thread pool)
+        return await asyncio.to_thread(self._parse_990_xml, xml_content, entry)
 
     def _parse_990_xml(
         self, xml_content: bytes, entry: IRS990IndexEntry
@@ -384,6 +506,116 @@ class IRS990Ingester(BaseIngester[IRS990Filing]):
 
         return None
 
+    def _extract_recipient_address(self, grant_elem: ET.Element) -> Address | None:
+        """Extract recipient address from Schedule I grant element.
+
+        Handles both US addresses and foreign addresses (including Canadian).
+        """
+        # Try US address first
+        us_addr = (
+            grant_elem.find(".//irs:USAddress", NS)
+            or grant_elem.find(".//USAddress")
+            or grant_elem.find(".//irs:RecipientUSAddress", NS)
+            or grant_elem.find(".//RecipientUSAddress")
+            or grant_elem.find(".//irs:AddressUS", NS)
+            or grant_elem.find(".//AddressUS")
+        )
+
+        if us_addr is not None:
+            return Address(
+                street=self._get_text(
+                    us_addr,
+                    [
+                        ".//irs:AddressLine1Txt",
+                        ".//AddressLine1Txt",
+                        ".//irs:AddressLine1",
+                        ".//AddressLine1",
+                    ],
+                ),
+                city=self._get_text(
+                    us_addr,
+                    [".//irs:CityNm", ".//CityNm", ".//irs:City", ".//City"],
+                ),
+                state=self._get_text(
+                    us_addr,
+                    [
+                        ".//irs:StateAbbreviationCd",
+                        ".//StateAbbreviationCd",
+                        ".//irs:State",
+                        ".//State",
+                    ],
+                ),
+                postal_code=self._get_text(
+                    us_addr,
+                    [".//irs:ZIPCd", ".//ZIPCd", ".//irs:ZIPCode", ".//ZIPCode"],
+                ),
+                country="US",
+            )
+
+        # Try foreign address (for Canadian and other international recipients)
+        foreign_addr = (
+            grant_elem.find(".//irs:ForeignAddress", NS)
+            or grant_elem.find(".//ForeignAddress")
+            or grant_elem.find(".//irs:RecipientForeignAddress", NS)
+            or grant_elem.find(".//RecipientForeignAddress")
+            or grant_elem.find(".//irs:AddressForeign", NS)
+            or grant_elem.find(".//AddressForeign")
+        )
+
+        if foreign_addr is not None:
+            # Extract country code
+            country = self._get_text(
+                foreign_addr,
+                [
+                    ".//irs:CountryCd",
+                    ".//CountryCd",
+                    ".//irs:Country",
+                    ".//Country",
+                ],
+            )
+
+            return Address(
+                street=self._get_text(
+                    foreign_addr,
+                    [
+                        ".//irs:AddressLine1Txt",
+                        ".//AddressLine1Txt",
+                        ".//irs:AddressLine1",
+                        ".//AddressLine1",
+                    ],
+                ),
+                city=self._get_text(
+                    foreign_addr,
+                    [
+                        ".//irs:CityNm",
+                        ".//CityNm",
+                        ".//irs:City",
+                        ".//City",
+                    ],
+                ),
+                state=self._get_text(
+                    foreign_addr,
+                    [
+                        ".//irs:ProvinceOrStateNm",
+                        ".//ProvinceOrStateNm",
+                        ".//irs:ProvinceOrState",
+                        ".//ProvinceOrState",
+                        ".//irs:StateProvinceOrCountry",
+                        ".//StateProvinceOrCountry",
+                    ],
+                ),
+                postal_code=self._get_text(
+                    foreign_addr,
+                    [
+                        ".//irs:ForeignPostalCd",
+                        ".//ForeignPostalCd",
+                        ".//irs:PostalCode",
+                        ".//PostalCode",
+                    ],
+                ),
+                country=country or "XX",  # XX for unknown foreign
+            )
+
     def _extract_officers(self, form_990: ET.Element) -> list[dict[str, Any]]:
         """Extract officers/directors from Part VII."""
         officers = []
@@ -523,12 +755,25 @@ class IRS990Ingester(BaseIngester[IRS990Filing]):
                 ],
             )
 
-            grants.append({
+            # Extract recipient address (US or foreign)
+            recipient_address = self._extract_recipient_address(grant_elem)
+
+            grant_data = {
                 "recipient_name": recipient_name,
                 "recipient_ein": recipient_ein,
                 "amount": amount,
                 "purpose": purpose,
-            })
+            }
+
+            # Add address fields if available
+            if recipient_address:
+                grant_data["recipient_address"] = recipient_address
+                grant_data["recipient_city"] = recipient_address.city
+                grant_data["recipient_state"] = recipient_address.state
+                grant_data["recipient_postal"] = recipient_address.postal_code
+                grant_data["recipient_country"] = recipient_address.country
+
+            grants.append(grant_data)
 
         return grants
 
@@ -646,6 +891,7 @@ class IRS990Ingester(BaseIngester[IRS990Filing]):
                 org_props["address_city"] = record.address.city
                 org_props["address_state"] = record.address.state
                 org_props["address_postal"] = record.address.postal_code
+                org_props["address_country"] = record.address.country
 
             if not existing:
                 org_props["created_at"] = datetime.utcnow().isoformat()
@@ -727,7 +973,22 @@ class IRS990Ingester(BaseIngester[IRS990Filing]):
                 if recipient_ein and len(recipient_ein) == 9:
                     recipient_ein = f"{recipient_ein[:2]}-{recipient_ein[2:]}"
 
-                # Create or find recipient organization
+                # Extract address info from grant
+                recipient_city = grant.get("recipient_city")
+                recipient_state = grant.get("recipient_state")
+                recipient_postal = grant.get("recipient_postal")
+                recipient_country = grant.get("recipient_country")
+                recipient_address = grant.get("recipient_address")
+                recipient_street = recipient_address.street if recipient_address else None
+
+                # Determine jurisdiction based on country
+                jurisdiction = "US"
+                if recipient_country and recipient_country != "US":
+                    jurisdiction = recipient_country
+                    if recipient_state:
+                        jurisdiction = f"{recipient_country}-{recipient_state}"
+
+                # Create or find recipient organization with address
                 if recipient_ein:
                     recipient_query = """
                     MERGE (r:Organization {ein: $ein})
@@ -737,28 +998,66 @@ class IRS990Ingester(BaseIngester[IRS990Filing]):
                         r.entity_type = 'ORGANIZATION',
                         r.org_type = 'nonprofit',
                         r.confidence = 0.8,
+                        r.jurisdiction = $jurisdiction,
                         r.created_at = $now
-                    SET r.updated_at = $now
+                    SET r.updated_at = $now,
+                        r.address_street = COALESCE($street, r.address_street),
+                        r.address_city = COALESCE($city, r.address_city),
+                        r.address_state = COALESCE($state, r.address_state),
+                        r.address_postal = COALESCE($postal, r.address_postal),
+                        r.address_country = COALESCE($country, r.address_country)
                     RETURN r.id as id
                     """
                 else:
-                    recipient_query = """
-                    MERGE (r:Organization {name: $name})
-                    ON CREATE SET
-                        r.id = $id,
-                        r.entity_type = 'ORGANIZATION',
-                        r.org_type = 'unknown',
-                        r.confidence = 0.5,
-                        r.created_at = $now
-                    SET r.updated_at = $now
-                    RETURN r.id as id
-                    """
+                    # For recipients without EIN, use name + country for matching
+                    # This is especially important for foreign recipients
+                    if recipient_country and recipient_country != "US":
+                        recipient_query = """
+                        MERGE (r:Organization {name: $name, address_country: $country})
+                        ON CREATE SET
+                            r.id = $id,
+                            r.entity_type = 'ORGANIZATION',
+                            r.org_type = 'unknown',
+                            r.confidence = 0.5,
+                            r.jurisdiction = $jurisdiction,
+                            r.created_at = $now
+                        SET r.updated_at = $now,
+                            r.address_street = COALESCE($street, r.address_street),
+                            r.address_city = COALESCE($city, r.address_city),
+                            r.address_state = COALESCE($state, r.address_state),
+                            r.address_postal = COALESCE($postal, r.address_postal)
+                        RETURN r.id as id
+                        """
+                    else:
+                        recipient_query = """
+                        MERGE (r:Organization {name: $name})
+                        ON CREATE SET
+                            r.id = $id,
+                            r.entity_type = 'ORGANIZATION',
+                            r.org_type = 'unknown',
+                            r.confidence = 0.5,
+                            r.jurisdiction = $jurisdiction,
+                            r.created_at = $now
+                        SET r.updated_at = $now,
+                            r.address_street = COALESCE($street, r.address_street),
+                            r.address_city = COALESCE($city, r.address_city),
+                            r.address_state = COALESCE($state, r.address_state),
+                            r.address_postal = COALESCE($postal, r.address_postal),
+                            r.address_country = COALESCE($country, r.address_country)
+                        RETURN r.id as id
+                        """
 
                 await session.run(
                     recipient_query,
                     ein=recipient_ein,
                     id=str(uuid4()),
                     name=grant["recipient_name"],
+                    jurisdiction=jurisdiction,
+                    street=recipient_street,
+                    city=recipient_city,
+                    state=recipient_state,
+                    postal=recipient_postal,
+                    country=recipient_country,
                     now=datetime.utcnow().isoformat(),
                 )
 
@@ -871,6 +1170,8 @@ async def run_irs990_ingestion(
     end_year: int | None = None,
     incremental: bool = True,
     limit: int | None = None,
+    target_entities: list[str] | None = None,
+    run_id: UUID | None = None,
 ) -> dict[str, Any]:
     """Run IRS 990 ingestion directly (not via Celery).
 
@@ -879,6 +1180,8 @@ async def run_irs990_ingestion(
         end_year: End year (default: current year)
         incremental: Whether to do incremental sync
         limit: Maximum number of records to process
+        target_entities: Optional list of EINs to ingest specifically
+        run_id: Optional run ID from API layer
 
     Returns:
         Ingestion result dictionary
@@ -890,12 +1193,13 @@ async def run_irs990_ingestion(
         config = IngestionConfig(
             incremental=incremental,
             limit=limit,
+            target_entities=target_entities,
             extra_params={
                 "start_year": start_year or current_year - 1,
                 "end_year": end_year or current_year,
             },
         )
-        result = await ingester.run(config)
+        result = await ingester.run(config, run_id=run_id)
         return result.model_dump()
     finally:
         await ingester.close()

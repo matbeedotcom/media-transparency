@@ -70,6 +70,7 @@ class Organization(EntityBase):
     # Source identifiers
     ein: str | None = Field(default=None, description="US Employer Identification Number")
     bn: str | None = Field(default=None, description="Canadian Business Number")
+    sedar_profile: str | None = Field(default=None, description="SEDAR+ profile identifier for Canadian public companies")
     opencorp_id: str | None = Field(default=None, description="OpenCorporates company URL")
 
     # Metadata

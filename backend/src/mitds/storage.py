@@ -220,3 +220,132 @@ def get_storage() -> StorageClient:
     if _storage_client is None:
         _storage_client = StorageClient()
     return _storage_client
+
+
+# =============================================================================
+# Evidence Storage Helpers (T015 - Case Intake System)
+# =============================================================================
+
+
+def generate_evidence_key(
+    case_id: str,
+    evidence_id: str,
+    filename: str = "content",
+    extension: str = "bin",
+) -> str:
+    """Generate a storage key for case evidence.
+
+    Format: evidence/{case_id}/{evidence_id}/{filename}.{extension}
+
+    Args:
+        case_id: The case ID (UUID as string)
+        evidence_id: The evidence ID (UUID as string)
+        filename: Base filename (default: 'content')
+        extension: File extension (default: 'bin')
+
+    Returns:
+        S3 key path for the evidence
+    """
+    return f"evidence/{case_id}/{evidence_id}/{filename}.{extension}"
+
+
+async def store_evidence_content(
+    case_id: str,
+    evidence_id: str,
+    content: bytes,
+    content_type: str = "application/octet-stream",
+    filename: str = "content",
+    extension: str | None = None,
+    metadata: dict[str, str] | None = None,
+) -> tuple[str, str]:
+    """Store evidence content in S3 and return the key and hash.
+
+    Args:
+        case_id: The case ID
+        evidence_id: The evidence ID
+        content: The raw content bytes
+        content_type: MIME type of the content
+        filename: Base filename for storage
+        extension: File extension (inferred from content_type if not provided)
+        metadata: Optional metadata to attach
+
+    Returns:
+        Tuple of (S3 key path, SHA-256 content hash)
+    """
+    # Infer extension from content type if not provided
+    if extension is None:
+        extension = _content_type_to_extension(content_type)
+
+    key = generate_evidence_key(case_id, evidence_id, filename, extension)
+    content_hash = compute_content_hash(content)
+
+    # Add hash to metadata
+    full_metadata = metadata or {}
+    full_metadata["content_hash"] = content_hash
+    full_metadata["case_id"] = case_id
+    full_metadata["evidence_id"] = evidence_id
+
+    storage = get_storage()
+    storage.upload_file(content, key, content_type, full_metadata)
+
+    return key, content_hash
+
+
+def _content_type_to_extension(content_type: str) -> str:
+    """Map MIME type to file extension."""
+    mapping = {
+        "text/html": "html",
+        "text/plain": "txt",
+        "application/json": "json",
+        "application/xml": "xml",
+        "text/xml": "xml",
+        "application/pdf": "pdf",
+        "image/png": "png",
+        "image/jpeg": "jpg",
+        "image/gif": "gif",
+    }
+    return mapping.get(content_type, "bin")
+
+
+async def retrieve_evidence_content(key: str) -> bytes:
+    """Retrieve evidence content from S3.
+
+    Args:
+        key: The S3 key path
+
+    Returns:
+        The raw content bytes
+    """
+    storage = get_storage()
+    return storage.download_file(key)
+
+
+async def delete_evidence_content(case_id: str, evidence_id: str) -> None:
+    """Delete all evidence content for a specific evidence record.
+
+    Args:
+        case_id: The case ID
+        evidence_id: The evidence ID
+    """
+    storage = get_storage()
+    prefix = f"evidence/{case_id}/{evidence_id}/"
+    keys = storage.list_files(prefix)
+    for key in keys:
+        storage.delete_file(key)
+
+
+async def delete_case_evidence(case_id: str) -> int:
+    """Delete all evidence content for a case.
+
+    Args:
+        case_id: The case ID
+
+    Returns:
+        Number of files deleted
+    """
+    storage = get_storage()
+    prefix = f"evidence/{case_id}/"
+    keys = storage.list_files(prefix)
+    for key in keys:
+        storage.delete_file(key)
+    return len(keys)

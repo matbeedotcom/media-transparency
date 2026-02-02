@@ -21,6 +21,8 @@ logger = get_logger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler for startup and shutdown events."""
+    import asyncio
+
     # Startup
     settings = get_settings()
     logger.info(
@@ -30,6 +32,37 @@ async def lifespan(app: FastAPI):
             "debug": settings.api_debug,
         },
     )
+
+    # Cancel orphaned ingestion runs from previous server lifetime
+    try:
+        from mitds.db import get_db_session
+        from sqlalchemy import text
+        from datetime import datetime
+
+        async with get_db_session() as db:
+            result = await db.execute(
+                text("""
+                    UPDATE ingestion_runs
+                    SET status = 'cancelled',
+                        completed_at = :now,
+                        errors = COALESCE(errors, CAST('[]' AS jsonb)) || CAST(:err AS jsonb)
+                    WHERE status IN ('running', 'pending')
+                """),
+                {
+                    "now": datetime.utcnow(),
+                    "err": '[{"error": "Server restarted - run cancelled"}]',
+                },
+            )
+            if result.rowcount > 0:
+                logger.info(
+                    f"Cancelled {result.rowcount} orphaned ingestion run(s) from previous session"
+                )
+    except Exception as e:
+        logger.warning(f"Failed to clean up orphaned ingestion runs: {e}")
+
+    # Warm up search cache in background (non-blocking)
+    from mitds.ingestion.search import warmup_search_cache
+    asyncio.create_task(warmup_search_cache())
 
     yield
 
@@ -138,6 +171,10 @@ from mitds.api.reports import router as reports_router
 from mitds.api.ingestion import router as ingestion_router
 from mitds.api.jobs import router as jobs_router
 from mitds.api.validation import router as validation_router
+from mitds.api.resolution import router as resolution_router
+from mitds.api.settings import router as settings_router
+from mitds.api.research import router as research_router
+from mitds.api.cases import router as cases_router
 
 app.include_router(entities_router, prefix="/api/v1", tags=["Entities"])
 app.include_router(relationships_router, prefix="/api/v1", tags=["Relationships"])
@@ -146,6 +183,10 @@ app.include_router(reports_router, prefix="/api/v1", tags=["Reports"])
 app.include_router(ingestion_router, prefix="/api/v1", tags=["Ingestion"])
 app.include_router(jobs_router, prefix="/api/v1", tags=["Jobs"])
 app.include_router(validation_router, prefix="/api/v1", tags=["Validation"])
+app.include_router(resolution_router, prefix="/api/v1", tags=["Resolution"])
+app.include_router(settings_router, prefix="/api/v1", tags=["Settings"])
+app.include_router(research_router, prefix="/api/v1", tags=["Research"])
+app.include_router(cases_router, prefix="/api/v1", tags=["Cases"])
 
 
 # =========================

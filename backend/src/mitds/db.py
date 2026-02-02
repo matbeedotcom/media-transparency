@@ -37,6 +37,7 @@ class Base(DeclarativeBase):
 # Engine and session factory (lazy initialization)
 _engine = None
 _session_factory = None
+_suppress_echo = False  # Flag to suppress echo during ingestion
 
 
 def get_engine():
@@ -44,14 +45,36 @@ def get_engine():
     global _engine
     if _engine is None:
         settings = get_settings()
+        # Respect _suppress_echo flag if set
+        echo = settings.api_debug and not _suppress_echo
         _engine = create_async_engine(
             settings.database_url,
-            echo=settings.api_debug,
+            echo=echo,
             pool_size=10,
             max_overflow=20,
             pool_pre_ping=True,
         )
     return _engine
+
+
+def set_echo_suppressed(suppressed: bool) -> bool:
+    """Set whether SQLAlchemy echo should be suppressed.
+
+    Args:
+        suppressed: True to suppress echo, False to allow it
+
+    Returns:
+        Previous suppression state
+    """
+    global _suppress_echo, _engine
+    previous = _suppress_echo
+    _suppress_echo = suppressed
+
+    # Also update existing engine if it exists
+    if _engine is not None:
+        _engine.echo = not suppressed and get_settings().api_debug
+
+    return previous
 
 
 def get_session_factory():

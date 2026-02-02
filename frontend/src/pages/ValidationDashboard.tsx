@@ -7,25 +7,16 @@
 
 import { useState, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import {
+  getValidationDashboard,
+  getGoldenDatasets,
+  runValidation as apiRunValidation,
+  getJobStatus,
+} from '../services/api';
 
 // =========================
 // Types
 // =========================
-
-interface ValidationMetrics {
-  recall: number;
-  precision: number;
-  f1_score: number;
-  false_positive_rate: number;
-  accuracy: number;
-  total_cases: number;
-  passed_cases: number;
-  failed_cases: number;
-  last_run_at: string | null;
-  meets_targets: boolean;
-  target_recall: number;
-  target_max_fpr: number;
-}
 
 interface DashboardData {
   summary: {
@@ -115,19 +106,15 @@ interface ValidationRunResponse {
 }
 
 // =========================
-// API Functions
+// API Wrappers
 // =========================
 
 async function fetchDashboard(): Promise<DashboardData> {
-  const response = await fetch('/api/validation/dashboard');
-  if (!response.ok) throw new Error('Failed to fetch dashboard');
-  return response.json();
+  return getValidationDashboard() as unknown as Promise<DashboardData>;
 }
 
 async function fetchDatasets(): Promise<GoldenDataset[]> {
-  const response = await fetch('/api/validation/datasets');
-  if (!response.ok) throw new Error('Failed to fetch datasets');
-  return response.json();
+  return getGoldenDatasets() as unknown as Promise<GoldenDataset[]>;
 }
 
 async function runValidation(params: {
@@ -135,22 +122,23 @@ async function runValidation(params: {
   include_synthetic: boolean;
   threshold: number;
 }): Promise<ValidationRunResponse> {
-  const response = await fetch('/api/validation/run', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
+  const result = await apiRunValidation({
+    dataset_id: params.dataset_id,
+    threshold: params.threshold,
+    include_synthetic: params.include_synthetic,
   });
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.detail || 'Failed to run validation');
-  }
-  return response.json();
+  return {
+    job_id: result.job_id,
+    status: result.status,
+    status_url: result.status_url || '',
+    estimated_cases: 0,
+  };
 }
 
 async function fetchJobStatus(jobId: string): Promise<{ status: string; results?: Record<string, number> }> {
-  const response = await fetch(`/api/validation/jobs/${jobId}`);
-  if (!response.ok) throw new Error('Failed to fetch job status');
-  return response.json();
+  const result = await getJobStatus(jobId);
+  const fullResult = result as unknown as Record<string, unknown>;
+  return { status: result.status, results: fullResult.results as Record<string, number> | undefined };
 }
 
 // =========================

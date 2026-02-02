@@ -159,3 +159,6 @@ data/processed/
 
 # Local S3/MinIO data
 .minio/
+
+# Search cache
+.cache/

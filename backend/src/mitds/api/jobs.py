@@ -186,7 +186,7 @@ async def list_jobs(
     status: str | None = Query(None, description="Filter by status"),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    user: CurrentUser = None,
+    user: OptionalUser = None,
 ) -> JobList:
     """List jobs with optional filtering.
 
@@ -273,7 +273,7 @@ async def list_jobs(
 @router.post("/{job_id}/cancel")
 async def cancel_job(
     job_id: UUID,
-    user: CurrentUser = None,
+    user: OptionalUser = None,
 ) -> JobStatus:
     """Cancel a pending or running job.
 

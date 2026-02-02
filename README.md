@@ -185,7 +185,7 @@ npm install
 ```bash
 # Terminal 1: Backend API
 cd backend
-uvicorn src.mitds.main:app --reload --port 8000
+python -m uvicorn src.main:app --reload --port 8001
 
 # Terminal 2: Frontend
 cd frontend
@@ -213,6 +213,8 @@ MITDS provides a command-line interface for all major operations:
 # Data Ingestion
 mitds ingest irs990 --start-year 2022 --end-year 2023 --limit 1000
 mitds ingest cra --incremental
+mitds ingest sec-edgar --limit 100              # US public companies (free)
+mitds ingest canada-corps --limit 100           # Canadian federal corporations (free)
 mitds ingest opencorporates --search "Media Foundation" --max-companies 50
 mitds ingest status
 
@@ -231,12 +233,26 @@ mitds --help
 
 | Source | Coverage | Refresh Rate | API Key Required |
 |--------|----------|--------------|------------------|
+| **SEC EDGAR** | US public companies, investment funds | Weekly | No (free) |
+| **Canada Corporations** | Canadian federal corporations (CBCA, NFP) | Weekly | No (free) |
 | IRS 990 | US nonprofits, 2011-present | Weekly | No |
 | CRA Charities | Canadian charities | Weekly | No |
 | OpenCorporates | Global corporate registries | Weekly | Yes (free tier available) |
 | Meta Ad Library | Political ads (US, Canada, EU) | Daily | Yes (Facebook Developer) |
 
-### Obtaining API Keys
+### Free Data Sources (Recommended)
+
+**SEC EDGAR** - https://www.sec.gov/developer
+- US public companies with filings (10-K, 10-Q, proxy statements)
+- Officers, directors, beneficial ownership
+- No registration required, just User-Agent header
+
+**Canada Corporations** - https://open.canada.ca/
+- Federal corporations under CBCA, NFP Act, Coop Act
+- Directors, registered office, status
+- Bulk data download, no registration required
+
+### Paid/Limited APIs
 
 **OpenCorporates**
 1. Register at https://opencorporates.com/users/sign_up

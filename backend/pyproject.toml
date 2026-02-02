@@ -61,6 +61,12 @@ dependencies = [
     "lxml>=5.1.0",
     "defusedxml>=0.7.1",
 
+    # PDF Processing (SEDAR+)
+    "pdfplumber>=0.10.0",
+
+    # Excel/XLSX Processing (Provincial data)
+    "openpyxl>=3.1.0",
+
     # Fuzzy Matching
     "rapidfuzz>=3.6.0",
 
@@ -76,6 +82,10 @@ dependencies = [
 
     # CLI
     "click>=8.1.0",
+
+    # Content Extraction (for Case Intake)
+    "trafilatura>=1.6.0",
+    "beautifulsoup4>=4.12.0",
 ]
 
 [project.optional-dependencies]

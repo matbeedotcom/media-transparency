@@ -5,9 +5,9 @@
  */
 
 import { useEffect, useRef, useCallback, useState } from 'react';
-import cytoscape, { Core, NodeSingular, EdgeSingular } from 'cytoscape';
+import cytoscape, { Core, NodeSingular, EdgeSingular, Layouts } from 'cytoscape';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { getEntityRelationships, getGraphAtTime, findAllPaths, type EntitySummary, type Relationship, type PathResult } from '../../services/api';
+import { getEntityRelationships, getGraphAtTime, findAllPaths, type Relationship, type PathResult } from '../../services/api';
 
 // Node color mapping by entity type
 const NODE_COLORS: Record<string, string> = {
@@ -24,6 +24,7 @@ const EDGE_COLORS: Record<string, string> = {
   DIRECTOR_OF: '#8B5CF6', // Purple
   EMPLOYED_BY: '#3B82F6', // Blue
   SHARED_INFRA: '#F59E0B', // Yellow
+  OWNS: '#E11D48', // Rose
   DEFAULT: '#9CA3AF', // Gray
 };
 
@@ -64,11 +65,12 @@ export default function EntityGraph({
   enablePathFinding = false,
   onPathFound,
   asOf,
-  onTemporalDateChange,
+  onTemporalDateChange: _onTemporalDateChange,
 }: EntityGraphProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
-  const [selectedNode, setSelectedNode] = useState<string | null>(null);
+  const layoutRef = useRef<Layouts | null>(null);
+  const [_selectedNode, setSelectedNode] = useState<string | null>(null);
   const [pathFindingMode, setPathFindingMode] = useState(false);
   const [pathSource, setPathSource] = useState<string | null>(null);
   const [pathTarget, setPathTarget] = useState<string | null>(null);
@@ -98,10 +100,20 @@ export default function EntityGraph({
         // Use temporal query
         const temporalData = await getGraphAtTime(entityId, asOf, { depth: maxHops });
         // Transform temporal data to match relationship data structure
+        const mappedRels: Relationship[] = (temporalData.relationships || []).map((r) => ({
+          id: r.id,
+          rel_type: r.rel_type,
+          source_entity: r.source,
+          target_entity: r.target,
+          confidence: 1,
+          properties: {},
+          valid_from: r.valid_from,
+          valid_to: r.valid_to,
+        }));
         return {
           entity_id: entityId,
-          relationships: temporalData.relationships || [],
-          total: temporalData.relationships?.length || 0,
+          relationships: mappedRels,
+          total: mappedRels.length,
         };
       }
       return getEntityRelationships(entityId, { direction: 'both' });
@@ -113,7 +125,7 @@ export default function EntityGraph({
   const transformToGraphElements = useCallback(
     (
       relationships: Relationship[],
-      centerEntityId: string
+      _centerEntityId: string
     ): { nodes: GraphNode[]; edges: GraphEdge[] } => {
       const nodesMap = new Map<string, GraphNode>();
       const edges: GraphEdge[] = [];
@@ -182,6 +194,12 @@ export default function EntityGraph({
         },
       })),
     ];
+
+    // Stop any running layout before creating/updating
+    if (layoutRef.current) {
+      layoutRef.current.stop();
+      layoutRef.current = null;
+    }
 
     // Initialize Cytoscape if not already done
     if (!cyRef.current) {
@@ -279,27 +297,32 @@ export default function EntityGraph({
             },
           },
         ],
-        layout: {
-          name: 'cose',
-          idealEdgeLength: 100,
-          nodeOverlap: 20,
-          refresh: 20,
-          fit: true,
-          padding: 30,
-          randomize: false,
-          componentSpacing: 100,
-          nodeRepulsion: 400000,
-          edgeElasticity: 100,
-          nestingFactor: 5,
-          gravity: 80,
-          numIter: 1000,
-          initialTemp: 200,
-          coolingFactor: 0.95,
-          minTemp: 1.0,
-        },
+        // Use preset layout initially (no animation), then run cose layout
+        layout: { name: 'preset' },
         minZoom: 0.3,
         maxZoom: 3,
       });
+
+      // Run the cose layout and store reference for cleanup
+      layoutRef.current = cyRef.current.layout({
+        name: 'cose',
+        idealEdgeLength: 100,
+        nodeOverlap: 20,
+        refresh: 20,
+        fit: true,
+        padding: 30,
+        randomize: false,
+        componentSpacing: 100,
+        nodeRepulsion: 400000,
+        edgeElasticity: 100,
+        nestingFactor: 5,
+        gravity: 80,
+        numIter: 1000,
+        initialTemp: 200,
+        coolingFactor: 0.95,
+        minTemp: 1.0,
+      } as cytoscape.LayoutOptions);
+      layoutRef.current.run();
 
       // Add event listeners
       cyRef.current.on('tap', 'node', (evt) => {
@@ -349,14 +372,20 @@ export default function EntityGraph({
       // Update existing graph with new data
       cyRef.current.elements().remove();
       cyRef.current.add(elements);
-      cyRef.current.layout({
+      layoutRef.current = cyRef.current.layout({
         name: 'cose',
         animate: true,
         animationDuration: 500,
-      } as cytoscape.LayoutOptions).run();
+      } as cytoscape.LayoutOptions);
+      layoutRef.current.run();
     }
 
     return () => {
+      // Stop any running layout first to prevent accessing destroyed instance
+      if (layoutRef.current) {
+        layoutRef.current.stop();
+        layoutRef.current = null;
+      }
       if (cyRef.current) {
         cyRef.current.destroy();
         cyRef.current = null;
