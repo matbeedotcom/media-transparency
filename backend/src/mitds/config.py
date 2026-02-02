@@ -128,6 +128,50 @@ class Settings(BaseSettings):
     meta_access_token: str = Field(default="", repr=False)
 
     # =========================
+    # Provincial Registry Credentials
+    # =========================
+    # Ontario (MyOntario / ServiceOntario)
+    ontario_registry_username: str = Field(default="", repr=False)
+    ontario_registry_password: str = Field(default="", repr=False)
+
+    # Saskatchewan (ISC)
+    saskatchewan_registry_username: str = Field(default="", repr=False)
+    saskatchewan_registry_password: str = Field(default="", repr=False)
+
+    # Manitoba (Companies Office)
+    manitoba_registry_username: str = Field(default="", repr=False)
+    manitoba_registry_password: str = Field(default="", repr=False)
+
+    # British Columbia (BC OnLine)
+    bc_registry_username: str = Field(default="", repr=False)
+    bc_registry_password: str = Field(default="", repr=False)
+
+    # Yukon (Corporate Online)
+    yukon_registry_username: str = Field(default="", repr=False)
+    yukon_registry_password: str = Field(default="", repr=False)
+
+    def get_registry_credentials(self, province: str) -> tuple[str, str] | None:
+        """Get credentials for a provincial registry.
+
+        Args:
+            province: Province code (e.g., 'ON', 'SK')
+
+        Returns:
+            Tuple of (username, password) if configured, None otherwise
+        """
+        credentials_map = {
+            "ON": (self.ontario_registry_username, self.ontario_registry_password),
+            "SK": (self.saskatchewan_registry_username, self.saskatchewan_registry_password),
+            "MB": (self.manitoba_registry_username, self.manitoba_registry_password),
+            "BC": (self.bc_registry_username, self.bc_registry_password),
+            "YT": (self.yukon_registry_username, self.yukon_registry_password),
+        }
+        creds = credentials_map.get(province.upper())
+        if creds and creds[0] and creds[1]:
+            return creds
+        return None
+
+    # =========================
     # JWT/Auth
     # =========================
     jwt_secret: str = Field(default="change-me-in-production", repr=False)

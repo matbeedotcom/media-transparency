@@ -327,12 +327,11 @@ def ingest_quebec_corps(
         sys.exit(1)
 
 
-@cli.command(name="ontario-corps")
+@cli.command(name="nova-scotia-coops")
 @click.option(
-    "--from-csv",
-    type=str,
-    default=None,
-    help="Path to CSV file with corporation data (required for Ontario)",
+    "--incremental/--full",
+    default=True,
+    help="Incremental or full sync (default: incremental)",
 )
 @click.option(
     "--limit",
@@ -346,49 +345,40 @@ def ingest_quebec_corps(
     is_flag=True,
     help="Enable verbose output",
 )
-def ingest_ontario_corps(
-    from_csv: str | None,
+def ingest_nova_scotia_coops(
+    incremental: bool,
     limit: int | None,
     verbose: bool,
 ):
-    """Ingest Ontario corporations via CSV upload.
+    """Ingest Nova Scotia co-operatives from the Registry of Joint Stock Companies.
 
-    IMPORTANT: Ontario does NOT provide bulk corporation data publicly.
-    The Ontario Business Registry only offers online searches, not bulk exports.
+    Downloads and processes the list of co-operatives registered in Nova Scotia
+    from the NS Open Data Portal.
 
-    Use this command with --from-csv to import manually gathered data.
-    Generate a CSV template first with: mitds ingest csv-template
+    Data includes: registry ID, name, year incorporated, address,
+    non-profit/for-profit classification, and co-op type.
+
+    Note: This only includes co-operatives, not all corporations.
+    Nova Scotia does not provide bulk data for other corporation types.
 
     Examples:
 
-        # Generate template
-        mitds ingest csv-template --output ./ontario_corps.csv
+        # Incremental sync (only changed records)
+        mitds ingest nova-scotia-coops
 
-        # Edit the CSV with your Ontario corporation data, then import
-        mitds ingest ontario-corps --from-csv ./ontario_corps.csv
+        # Full sync
+        mitds ingest nova-scotia-coops --full
 
-        # Limit records
-        mitds ingest ontario-corps --from-csv ./ontario_corps.csv --limit 100
+        # Test with limited records
+        mitds ingest nova-scotia-coops --limit 100 --verbose
     """
-    from ..ingestion.provincial.targeted import run_targeted_ingestion
+    from ..ingestion.provincial.nova_scotia import run_nova_scotia_coops_ingestion
 
-    if not from_csv:
-        click.echo("Error: Ontario does NOT provide bulk corporation data.", err=True)
-        click.echo("\nOntario Business Registry only offers online searches.", err=True)
-        click.echo("Use --from-csv to import manually gathered data:", err=True)
-        click.echo("\n  1. Generate a CSV template:", err=True)
-        click.echo("     mitds ingest csv-template --output ./ontario_corps.csv", err=True)
-        click.echo("\n  2. Fill in your Ontario corporation data", err=True)
-        click.echo("\n  3. Import the CSV:", err=True)
-        click.echo("     mitds ingest ontario-corps --from-csv ./ontario_corps.csv", err=True)
-        sys.exit(1)
-
-    click.echo("Starting Ontario corporation ingestion (CSV upload)...")
+    click.echo("Starting Nova Scotia co-operatives ingestion...")
 
     if verbose:
-        click.echo(f"  Province: ON")
-        click.echo(f"  Mode: csv")
-        click.echo(f"  CSV file: {from_csv}")
+        click.echo(f"  Mode: {'incremental' if incremental else 'full'}")
+        click.echo("  Source: NS Open Data Portal (co-operatives only)")
         if limit:
             click.echo(f"  Limit: {limit} records")
 
@@ -396,9 +386,8 @@ def ingest_ontario_corps(
 
     try:
         result = asyncio.run(
-            run_targeted_ingestion(
-                province="ON",
-                from_csv=from_csv,
+            run_nova_scotia_coops_ingestion(
+                incremental=incremental,
                 limit=limit,
             )
         )
@@ -407,12 +396,6 @@ def ingest_ontario_corps(
 
         _print_result(result, duration, verbose)
 
-    except FileNotFoundError as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
-    except ValueError as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         if verbose:
@@ -519,30 +502,106 @@ def cross_reference_provincial(
         sys.exit(1)
 
 
-@cli.command(name="targeted-corps")
+@cli.command(name="provincial-availability")
+def provincial_availability():
+    """Show which provinces have bulk data available for ingestion.
+
+    Lists all Canadian provinces and territories with their data availability
+    status. Only provinces with bulk open data can be ingested automatically.
+
+    Provinces WITHOUT bulk data require manual research through their
+    respective online registries and can be matched using the cross-reference
+    service after being found through other sources (SEC, SEDAR, etc.).
+    """
+    from ..ingestion.provincial.targeted import get_available_provinces, get_unavailable_provinces
+
+    click.echo("\n" + "=" * 60)
+    click.secho("Provincial Corporation Data Availability", fg="cyan", bold=True)
+    click.echo("=" * 60)
+
+    click.echo("\n" + click.style("[+] BULK DATA AVAILABLE:", fg="green", bold=True))
+    click.echo("-" * 40)
+
+    available = get_available_provinces()
+    for code, desc in available.items():
+        click.echo(f"  {code}: {desc}")
+
+    click.echo(f"\n  Commands:")
+    click.echo(f"    mitds ingest quebec-corps")
+    click.echo(f"    mitds ingest alberta-nonprofits")
+    click.echo(f"    mitds ingest nova-scotia-coops")
+
+    click.echo("\n" + click.style("[-] NO BULK DATA (search-only registries):", fg="red", bold=True))
+    click.echo("-" * 40)
+
+    unavailable = get_unavailable_provinces()
+    for code, reason in unavailable.items():
+        click.echo(f"  {code}: {reason}")
+
+    click.echo("\n" + click.style("[*] SEARCH-ONLY REGISTRIES:", fg="yellow", bold=True))
+    click.echo("-" * 40)
+
+    from ..ingestion.provincial.search import get_registry_access_info
+    access_info = get_registry_access_info()
+
+    # Split into public search vs account required
+    public_search = [(code, info) for code, info in access_info.items() if info.get("public_search")]
+    account_required = [(code, info) for code, info in access_info.items() if info.get("requires_account")]
+
+    if public_search:
+        click.echo("\n  " + click.style("Public search available (Playwright):", fg="green"))
+        for code, info in public_search:
+            click.echo(f"    {code}: {info['name']} - {info['notes']}")
+        click.echo("\n  Example:")
+        click.echo("    mitds ingest provincial-search -p ON -e 'Company Name'")
+
+    if account_required:
+        click.echo("\n  " + click.style("Account required (manual lookup only):", fg="red"))
+        for code, info in account_required:
+            click.echo(f"    {code}: {info['name']} - {info['notes']}")
+
+    click.echo("\n" + click.style("Alternative approach:", fg="cyan"))
+    click.echo("  Entities can also be discovered through:")
+    click.echo("    - SEC EDGAR (US-listed Canadian companies)")
+    click.echo("    - SEDAR+ (Canadian securities filings)")
+    click.echo("    - Elections Canada (third party advertisers)")
+    click.echo("    - Lobbying Registry (registered lobbyists)")
+    click.echo("  Then cross-referenced with: mitds ingest cross-reference")
+
+
+@cli.command(name="provincial-search")
 @click.option(
     "--province",
-    type=str,
+    "-p",
     required=True,
-    help="Province code (ON, SK, MB, NB, PE/PEI, NL, NT, YT, NU)",
+    help="Province code to search (e.g., ON, SK, MB, BC)",
 )
 @click.option(
-    "--target",
-    type=str,
-    default=None,
-    help="Comma-separated entity names to search for (web scraping mode)",
+    "--entity",
+    "-e",
+    multiple=True,
+    help="Company name to search for (can be specified multiple times)",
 )
 @click.option(
     "--from-csv",
-    type=str,
-    default=None,
-    help="Path to CSV file with corporation data (manual upload mode)",
+    type=click.Path(exists=True),
+    help="CSV file with company names (must have 'name' column)",
 )
 @click.option(
     "--limit",
     type=int,
     default=None,
-    help="Maximum number of records to process",
+    help="Maximum number of entities to search",
+)
+@click.option(
+    "--headless/--no-headless",
+    default=True,
+    help="Run browser in headless mode (default: headless)",
+)
+@click.option(
+    "--save/--no-save",
+    default=True,
+    help="Save results to database (default: save)",
 )
 @click.option(
     "--verbose",
@@ -550,83 +609,144 @@ def cross_reference_provincial(
     is_flag=True,
     help="Enable verbose output",
 )
-def ingest_targeted_corps(
+def ingest_provincial_search(
     province: str,
-    target: str | None,
+    entity: tuple[str, ...],
     from_csv: str | None,
     limit: int | None,
+    headless: bool,
+    save: bool,
     verbose: bool,
 ):
-    """Ingest corporations from provinces without bulk data access.
+    """Search provincial registries for specific companies using Playwright.
 
-    Supports two modes:
-    1. Target mode (--target): Search for specific entities by name via web scraping
-    2. CSV mode (--from-csv): Import pre-gathered data from a CSV file
+    For provinces that don't provide bulk data downloads, this command uses
+    browser automation to search their online registries.
 
-    Provinces without bulk data: ON, SK, MB, NB, PE/PEI, NL, NT, YT, NU
+    Requires Playwright: pip install playwright && playwright install chromium
 
-    Note: Web scraping is fragile and may require updates if websites change.
-    For reliable ingestion, use CSV upload mode with manually gathered data.
+    Supported provinces: ON, SK, MB, BC, NB, PE, NL, NT, YT, NU
 
     Examples:
 
-        # Search for specific entities (web scraping)
-        mitds ingest targeted-corps --province SK --target "Postmedia Network,Corus Entertainment"
+        # Search Ontario for a specific company
+        mitds ingest provincial-search -p ON -e "Postmedia Network Inc."
 
-        # Import from CSV file (reliable)
-        mitds ingest targeted-corps --province SK --from-csv /path/to/known_entities.csv
+        # Search multiple companies
+        mitds ingest provincial-search -p SK -e "SaskTel" -e "Corus Entertainment"
 
-        # Generate CSV template first
-        mitds ingest csv-template --output /path/to/template.csv
+        # Search from CSV file (must have 'name' column)
+        mitds ingest provincial-search -p MB --from-csv companies.csv
+
+        # Run with visible browser (for debugging)
+        mitds ingest provincial-search -p ON -e "Test Corp" --no-headless
     """
     from ..ingestion.provincial.targeted import run_targeted_ingestion
+    from ..ingestion.provincial.search import get_registry_access_info, get_public_search_provinces
 
-    if not target and not from_csv:
-        click.echo("Error: Either --target or --from-csv is required", err=True)
-        click.echo("\nExamples:", err=True)
-        click.echo("  mitds ingest targeted-corps --province SK --target \"Company A,Company B\"", err=True)
-        click.echo("  mitds ingest targeted-corps --province SK --from-csv ./data.csv", err=True)
+    # Validate province
+    search_provinces = {"ON", "SK", "MB", "BC", "NB", "PE", "PEI", "NL", "NT", "YT", "NU"}
+    bulk_provinces = {"QC", "AB", "NS"}
+    public_search_provinces = set(get_public_search_provinces())
+
+    province_upper = province.upper()
+    if province_upper == "PEI":
+        province_upper = "PE"
+
+    if province_upper in bulk_provinces:
+        click.echo(
+            f"Error: Province {province_upper} has bulk data available. "
+            f"Use the dedicated ingester instead:",
+            err=True,
+        )
+        click.echo(f"  - QC: mitds ingest quebec-corps", err=True)
+        click.echo(f"  - AB: mitds ingest alberta-nonprofits", err=True)
+        click.echo(f"  - NS: mitds ingest nova-scotia-coops", err=True)
         sys.exit(1)
 
-    click.echo(f"Starting {province.upper()} targeted corporation ingestion...")
+    if province_upper not in search_provinces:
+        click.echo(
+            f"Error: Province '{province}' is not supported.", err=True
+        )
+        click.echo(f"Supported: {', '.join(sorted(search_provinces))}", err=True)
+        sys.exit(1)
 
-    target_entities = None
-    if target:
-        target_entities = [t.strip() for t in target.split(",")]
+    # Check if province requires account
+    if province_upper not in public_search_provinces:
+        access_info = get_registry_access_info()
+        info = access_info.get(province_upper, {})
+        click.echo(
+            f"Error: {info.get('name', province_upper)} registry requires an account.",
+            err=True,
+        )
+        click.echo(f"  {info.get('notes', 'No public search available')}", err=True)
+        click.echo(f"  Registry URL: {info.get('url', 'N/A')}", err=True)
+        click.echo("\nUse 'mitds ingest provincial-availability' to see all options.", err=True)
+        sys.exit(1)
 
-    mode = "csv" if from_csv else "web-scraping"
+    # Build search terms
+    search_terms = list(entity)
+
+    if not search_terms and not from_csv:
+        click.echo(
+            "Error: No search terms provided. Use --entity or --from-csv.",
+            err=True,
+        )
+        sys.exit(1)
+
+    click.echo(f"Starting {province_upper} registry search...")
 
     if verbose:
-        click.echo(f"  Province: {province.upper()}")
-        click.echo(f"  Mode: {mode}")
-        if target_entities:
-            click.echo(f"  Target entities: {target_entities}")
+        click.echo(f"  Province: {province_upper}")
+        click.echo(f"  Headless: {headless}")
+        click.echo(f"  Save to DB: {save}")
+        if entity:
+            click.echo(f"  Entities: {len(entity)}")
         if from_csv:
             click.echo(f"  CSV file: {from_csv}")
         if limit:
-            click.echo(f"  Limit: {limit} records")
+            click.echo(f"  Limit: {limit}")
 
     start_time = datetime.now()
 
     try:
         result = asyncio.run(
             run_targeted_ingestion(
-                province=province,
-                target_entities=target_entities,
+                province=province_upper,
+                target_entities=search_terms if search_terms else None,
                 from_csv=from_csv,
                 limit=limit,
+                headless=headless,
+                save_to_db=save,
             )
         )
 
         duration = (datetime.now() - start_time).total_seconds()
 
-        _print_result(result, duration, verbose)
+        click.echo(f"\n{'=' * 40}")
+        click.echo(f"Search completed in {duration:.1f}s")
+        click.echo(f"  Results found: {result.get('results_found', 0)}")
+        click.echo(f"  Records created: {result.get('records_created', 0)}")
+        click.echo(f"  Records updated: {result.get('records_updated', 0)}")
 
-    except FileNotFoundError as e:
+        if verbose and result.get("results"):
+            click.echo(f"\nResults:")
+            for r in result["results"]:
+                click.echo(f"  - {r['name']} ({r['registration_number']}) - {r['status']}")
+
+        if result.get("errors"):
+            click.echo(f"\nErrors ({len(result['errors'])}):")
+            for err in result["errors"][:5]:
+                click.echo(f"  - {err}")
+
+    except ImportError as e:
         click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
-    except ValueError as e:
-        click.echo(f"Error: {e}", err=True)
+        click.echo(
+            "\nTo use provincial search, install Playwright:",
+            err=True,
+        )
+        click.echo("  pip install playwright", err=True)
+        click.echo("  playwright install chromium", err=True)
         sys.exit(1)
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
@@ -636,53 +756,154 @@ def ingest_targeted_corps(
         sys.exit(1)
 
 
-@cli.command(name="csv-template")
+@cli.command(name="provincial-corps")
 @click.option(
-    "--output",
+    "--provinces",
     type=str,
     default=None,
-    help="Output path for CSV template (default: print to stdout)",
+    help="Comma-separated province codes to ingest (default: all bulk-data provinces)",
 )
-def generate_csv_template_cmd(
-    output: str | None,
+@click.option(
+    "--incremental/--full",
+    default=True,
+    help="Incremental or full sync (default: incremental)",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum number of records to process per province",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Enable verbose output",
+)
+def ingest_provincial_corps_batch(
+    provinces: str | None,
+    incremental: bool,
+    limit: int | None,
+    verbose: bool,
 ):
-    """Generate a CSV template for manual corporation data upload.
+    """Batch ingest corporations from all provinces with bulk data.
 
-    Creates a CSV template with the required columns for importing
-    corporation data into provinces without bulk data access.
+    Runs ingestion for all specified provinces sequentially.
+    Only provinces with bulk data access are supported.
 
-    Required columns: name, registration_number, corp_type, status
-    Optional columns: business_number, incorporation_date, street, city, province, postal_code
+    Currently supported bulk-data provinces:
+    - QC: Quebec (Registraire des Entreprises - daily CSV, all corp types)
+    - AB: Alberta (Non-profit organizations only - monthly XLSX)
+    - NS: Nova Scotia (Co-operatives only - CSV)
+
+    Provinces WITHOUT bulk data (BC, SK, MB, ON, NB, PE, NL, NT, YT, NU)
+    do not provide open data exports. Use 'mitds ingest provincial-availability'
+    to see alternatives.
 
     Examples:
 
-        # Print template to stdout
-        mitds ingest csv-template
+        # Ingest all bulk-data provinces
+        mitds ingest provincial-corps
 
-        # Save to file
-        mitds ingest csv-template --output ./my_corporations.csv
+        # Ingest specific provinces
+        mitds ingest provincial-corps --provinces QC,AB,NS
 
-        # Then import
-        mitds ingest targeted-corps --province SK --from-csv ./my_corporations.csv
+        # Test with limited records
+        mitds ingest provincial-corps --limit 100 --verbose
     """
-    from ..ingestion.provincial.targeted import generate_csv_template
+    from ..ingestion.provincial import run_quebec_corps_ingestion
+    from ..ingestion.provincial import run_alberta_nonprofits_ingestion
+    from ..ingestion.provincial.nova_scotia import run_nova_scotia_coops_ingestion
 
-    try:
-        template = generate_csv_template(output)
+    # Provinces with bulk data and their ingestion functions
+    BULK_DATA_PROVINCES = {
+        "QC": ("Quebec corporations", run_quebec_corps_ingestion),
+        "AB": ("Alberta non-profits", run_alberta_nonprofits_ingestion),
+        "NS": ("Nova Scotia co-ops", run_nova_scotia_coops_ingestion),
+    }
 
-        if output:
-            click.echo(f"CSV template saved to: {output}")
-        else:
-            click.echo("CSV Template:")
-            click.echo("-" * 40)
-            click.echo(template)
-            click.echo("-" * 40)
-            click.echo("\nSave this template to a file, fill in your data, then import with:")
-            click.echo("  mitds ingest targeted-corps --province SK --from-csv ./your_file.csv")
+    if provinces:
+        province_list = [p.strip().upper() for p in provinces.split(",")]
+        # Validate provinces
+        invalid = [p for p in province_list if p not in BULK_DATA_PROVINCES]
+        if invalid:
+            click.echo(
+                f"Error: Provinces {invalid} don't have bulk data access.", err=True
+            )
+            click.echo(f"Valid bulk-data provinces: {list(BULK_DATA_PROVINCES.keys())}", err=True)
+            click.echo(
+                "\nRun 'mitds ingest provincial-availability' to see all options.",
+                err=True,
+            )
+            sys.exit(1)
+    else:
+        province_list = list(BULK_DATA_PROVINCES.keys())
 
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+    click.echo(f"Starting batch provincial corporation ingestion...")
+    click.echo(f"  Provinces: {province_list}")
+
+    if verbose:
+        click.echo(f"  Mode: {'incremental' if incremental else 'full'}")
+        if limit:
+            click.echo(f"  Limit: {limit} records per province")
+
+    total_start = datetime.now()
+    results = []
+
+    for province in province_list:
+        desc, ingestion_func = BULK_DATA_PROVINCES[province]
+
+        click.echo(f"\n{'=' * 40}")
+        click.echo(f"Processing {province} ({desc})...")
+        click.echo("=" * 40)
+
+        start_time = datetime.now()
+
+        try:
+            result = asyncio.run(
+                ingestion_func(
+                    incremental=incremental,
+                    limit=limit,
+                )
+            )
+
+            duration = (datetime.now() - start_time).total_seconds()
+            result["province"] = province
+            result["duration"] = duration
+            results.append(result)
+
+            click.echo(f"\n{province} completed in {duration:.1f}s")
+            click.echo(f"  Processed: {result.get('records_processed', 0)}")
+            click.echo(f"  Created: {result.get('records_created', 0)}")
+
+        except Exception as e:
+            click.echo(f"Error processing {province}: {e}", err=True)
+            results.append({
+                "province": province,
+                "status": "failed",
+                "error": str(e),
+            })
+
+    # Print summary
+    total_duration = (datetime.now() - total_start).total_seconds()
+
+    click.echo("\n" + "=" * 50)
+    click.secho("BATCH INGESTION COMPLETE", fg="green")
+    click.echo("=" * 50)
+    click.echo(f"Total duration: {total_duration:.1f} seconds")
+    click.echo(f"Provinces processed: {len(results)}")
+
+    total_processed = sum(r.get("records_processed", 0) for r in results)
+    total_created = sum(r.get("records_created", 0) for r in results)
+    click.echo(f"Total records processed: {total_processed}")
+    click.echo(f"Total records created: {total_created}")
+
+    # Check for failures
+    failures = [r for r in results if r.get("status") == "failed"]
+    if failures:
+        click.secho(f"\nFailed provinces: {len(failures)}", fg="red")
+        for f in failures:
+            click.echo(f"  - {f['province']}: {f.get('error', 'Unknown error')}")
 
 
 @cli.command(name="opencorporates")

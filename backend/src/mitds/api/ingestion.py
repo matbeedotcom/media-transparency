@@ -46,6 +46,46 @@ class IngestionRunResponse(BaseModel):
     errors: list[dict[str, Any]] = []
 
 
+class ProvincialIngestionRequest(BaseModel):
+    """Request for triggering provincial corporation ingestion."""
+
+    incremental: bool = True
+    limit: int | None = None
+    target_entities: list[str] | None = None
+    from_csv: str | None = None  # Path to CSV file for targeted ingestion
+
+
+class CrossReferenceRequest(BaseModel):
+    """Request for triggering cross-reference operation."""
+
+    provinces: list[str] | None = None  # List of province codes, None = all
+    auto_link_threshold: float = 0.95
+    review_threshold: float = 0.85
+
+
+class CrossReferenceResponse(BaseModel):
+    """Response for cross-reference operation."""
+
+    total_processed: int = 0
+    matched_by_bn: int = 0
+    matched_by_exact_name: int = 0
+    matched_by_fuzzy_name: int = 0
+    auto_linked: int = 0
+    flagged_for_review: int = 0
+    no_match: int = 0
+
+
+class ReviewItem(BaseModel):
+    """A match flagged for manual review."""
+
+    provincial_record_name: str
+    matched_entity_id: UUID | None = None
+    matched_entity_name: str | None = None
+    match_score: float
+    match_method: str
+    jurisdiction: str
+
+
 # =========================
 # Search Companies
 # =========================
@@ -556,4 +596,565 @@ async def trigger_ingestion(
         "status": "running",
         "status_url": f"/api/v1/ingestion/runs/{run_id}",
         "message": f"Ingestion started for {source}",
+    }
+
+
+# =========================
+# Provincial Corporation Ingestion
+# =========================
+
+
+# Valid province codes for bulk data ingestion
+BULK_DATA_PROVINCES = ["QC"]  # Only Quebec has bulk data
+
+# Provinces requiring targeted ingestion (CSV upload or web scraping)
+TARGETED_PROVINCES = ["ON", "SK", "MB", "NB", "PE", "NL", "NT", "YT", "NU"]
+
+ALL_PROVINCES = BULK_DATA_PROVINCES + TARGETED_PROVINCES
+
+
+@router.get("/provincial")
+async def list_provincial_sources(
+    user: OptionalUser = None,
+) -> dict[str, Any]:
+    """List available provincial corporation data sources.
+
+    Returns information about each province's data availability
+    and ingestion method (bulk vs targeted).
+    """
+    sources = []
+
+    for province in BULK_DATA_PROVINCES:
+        sources.append({
+            "province": province,
+            "name": _get_province_name(province),
+            "method": "bulk",
+            "description": "Bulk CSV download available",
+            "cli_command": f"mitds ingest {province.lower()}-corps",
+        })
+
+    for province in TARGETED_PROVINCES:
+        sources.append({
+            "province": province,
+            "name": _get_province_name(province),
+            "method": "targeted",
+            "description": "CSV upload or web scraping (no bulk data)",
+            "cli_command": f"mitds ingest targeted-corps --province {province}",
+        })
+
+    return {
+        "sources": sources,
+        "total": len(sources),
+        "bulk_data_provinces": BULK_DATA_PROVINCES,
+        "targeted_provinces": TARGETED_PROVINCES,
+    }
+
+
+def _get_province_name(code: str) -> str:
+    """Get full province name from code."""
+    names = {
+        "QC": "Quebec",
+        "ON": "Ontario",
+        "AB": "Alberta",
+        "BC": "British Columbia",
+        "SK": "Saskatchewan",
+        "MB": "Manitoba",
+        "NB": "New Brunswick",
+        "NS": "Nova Scotia",
+        "PE": "Prince Edward Island",
+        "NL": "Newfoundland and Labrador",
+        "NT": "Northwest Territories",
+        "YT": "Yukon",
+        "NU": "Nunavut",
+    }
+    return names.get(code, code)
+
+
+async def _run_provincial_ingestion_task(
+    province: str,
+    run_id: UUID,
+    request: ProvincialIngestionRequest,
+):
+    """Background task to run provincial ingestion."""
+    try:
+        if province == "QC":
+            from ..ingestion.provincial import run_quebec_corps_ingestion
+            result = await run_quebec_corps_ingestion(
+                incremental=request.incremental,
+                limit=request.limit,
+                target_entities=request.target_entities,
+                run_id=run_id,
+            )
+        elif province in TARGETED_PROVINCES:
+            from ..ingestion.provincial import run_targeted_ingestion
+            result = await run_targeted_ingestion(
+                province=province,
+                target_entities=request.target_entities,
+                from_csv=request.from_csv,
+                limit=request.limit,
+                run_id=run_id,
+            )
+        else:
+            result = {
+                "status": "failed",
+                "errors": [{"error": f"Province {province} not implemented"}],
+            }
+
+        # Update run in database
+        async with get_db_session() as db:
+            update_query = text("""
+                UPDATE ingestion_runs
+                SET status = :status,
+                    completed_at = :completed_at,
+                    records_processed = :records_processed,
+                    records_created = :records_created,
+                    records_updated = :records_updated,
+                    duplicates_found = :duplicates_found,
+                    errors = CAST(:errors AS jsonb)
+                WHERE id = :run_id
+            """)
+
+            await db.execute(
+                update_query,
+                {
+                    "run_id": run_id,
+                    "status": result.get("status", "completed"),
+                    "completed_at": datetime.utcnow(),
+                    "records_processed": result.get("records_processed", 0),
+                    "records_created": result.get("records_created", 0),
+                    "records_updated": result.get("records_updated", 0),
+                    "duplicates_found": result.get("duplicates_found", 0),
+                    "errors": json.dumps(result.get("errors", []), default=str),
+                },
+            )
+            await db.commit()
+
+    except Exception as e:
+        async with get_db_session() as db:
+            error_query = text("""
+                UPDATE ingestion_runs
+                SET status = 'failed',
+                    completed_at = :completed_at,
+                    errors = CAST(:errors AS jsonb)
+                WHERE id = :run_id
+            """)
+
+            await db.execute(
+                error_query,
+                {
+                    "run_id": run_id,
+                    "completed_at": datetime.utcnow(),
+                    "errors": json.dumps([{"error": str(e), "fatal": True}]),
+                },
+            )
+            await db.commit()
+
+
+@router.post("/provincial/{province}")
+async def trigger_provincial_ingestion(
+    province: str,
+    background_tasks: BackgroundTasks,
+    request: ProvincialIngestionRequest | None = None,
+    user: OptionalUser = None,
+) -> dict[str, Any]:
+    """Trigger provincial corporation ingestion.
+
+    For bulk data provinces (QC), downloads and processes the full dataset.
+    For targeted provinces (ON, SK, MB, etc.), requires either:
+    - target_entities: List of entity names to search
+    - from_csv: Path to CSV file with corporation data
+
+    Args:
+        province: Province code (QC, ON, SK, MB, NB, PE, NL, NT, YT, NU)
+        request: Ingestion configuration
+    """
+    province = province.upper()
+
+    if province not in ALL_PROVINCES:
+        raise ValidationError(
+            f"Invalid province: {province}. Must be one of {ALL_PROVINCES}"
+        )
+
+    if request is None:
+        request = ProvincialIngestionRequest()
+
+    # Validate targeted ingestion requirements
+    if province in TARGETED_PROVINCES:
+        if not request.target_entities and not request.from_csv:
+            raise ValidationError(
+                f"Province {province} requires either target_entities or from_csv parameter. "
+                f"No bulk data is available for this province."
+            )
+
+    # Create ingestion run record
+    run_id = uuid4()
+    source_name = f"{province.lower()}-corps"
+
+    async with get_db_session() as db:
+        insert_query = text("""
+            INSERT INTO ingestion_runs (id, source, started_at, status)
+            VALUES (:id, :source, :started_at, :status)
+        """)
+
+        await db.execute(
+            insert_query,
+            {
+                "id": run_id,
+                "source": source_name,
+                "started_at": datetime.utcnow(),
+                "status": "running",
+            },
+        )
+        await db.commit()
+
+    # Start background task
+    background_tasks.add_task(
+        _run_provincial_ingestion_task, province, run_id, request
+    )
+
+    return {
+        "run_id": str(run_id),
+        "province": province,
+        "source": source_name,
+        "status": "running",
+        "status_url": f"/api/v1/ingestion/runs/{run_id}",
+        "message": f"Provincial ingestion started for {_get_province_name(province)}",
+    }
+
+
+@router.get("/provincial/{province}/status")
+async def get_provincial_ingestion_status(
+    province: str,
+    user: OptionalUser = None,
+) -> dict[str, Any]:
+    """Get status of provincial corporation ingestion.
+
+    Returns the latest run information for the specified province.
+    """
+    province = province.upper()
+    source_name = f"{province.lower()}-corps"
+
+    if province in TARGETED_PROVINCES:
+        source_name = f"{province.lower()}-targeted"
+
+    async with get_db_session() as db:
+        query = text("""
+            SELECT
+                id as run_id,
+                source,
+                status,
+                started_at,
+                completed_at,
+                records_processed,
+                records_created,
+                records_updated,
+                duplicates_found,
+                errors
+            FROM ingestion_runs
+            WHERE source LIKE :source_pattern
+            ORDER BY started_at DESC
+            LIMIT 1
+        """)
+
+        result = await db.execute(query, {"source_pattern": f"{province.lower()}%"})
+        run = result.fetchone()
+
+        if not run:
+            return {
+                "province": province,
+                "name": _get_province_name(province),
+                "status": "never_run",
+                "method": "bulk" if province in BULK_DATA_PROVINCES else "targeted",
+                "last_run": None,
+            }
+
+        return {
+            "province": province,
+            "name": _get_province_name(province),
+            "status": run.status,
+            "method": "bulk" if province in BULK_DATA_PROVINCES else "targeted",
+            "last_run": {
+                "run_id": str(run.run_id),
+                "status": run.status,
+                "started_at": run.started_at.isoformat() if run.started_at else None,
+                "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+                "records_processed": run.records_processed or 0,
+                "records_created": run.records_created or 0,
+                "records_updated": run.records_updated or 0,
+                "duplicates_found": run.duplicates_found or 0,
+            },
+        }
+
+
+# =========================
+# Cross-Reference Endpoints
+# =========================
+
+
+async def _run_cross_reference_task(
+    run_id: UUID,
+    request: CrossReferenceRequest,
+):
+    """Background task to run cross-referencing."""
+    try:
+        from ..ingestion.provincial import run_cross_reference
+
+        result = await run_cross_reference(
+            provinces=request.provinces,
+            auto_link_threshold=request.auto_link_threshold,
+            review_threshold=request.review_threshold,
+        )
+
+        # Update run in database
+        async with get_db_session() as db:
+            update_query = text("""
+                UPDATE ingestion_runs
+                SET status = :status,
+                    completed_at = :completed_at,
+                    records_processed = :records_processed,
+                    records_created = :records_created,
+                    records_updated = :records_updated
+                WHERE id = :run_id
+            """)
+
+            await db.execute(
+                update_query,
+                {
+                    "run_id": run_id,
+                    "status": "completed",
+                    "completed_at": datetime.utcnow(),
+                    "records_processed": result.get("total_processed", 0),
+                    "records_created": result.get("auto_linked", 0),
+                    "records_updated": result.get("flagged_for_review", 0),
+                },
+            )
+            await db.commit()
+
+    except Exception as e:
+        async with get_db_session() as db:
+            error_query = text("""
+                UPDATE ingestion_runs
+                SET status = 'failed',
+                    completed_at = :completed_at,
+                    errors = CAST(:errors AS jsonb)
+                WHERE id = :run_id
+            """)
+
+            await db.execute(
+                error_query,
+                {
+                    "run_id": run_id,
+                    "completed_at": datetime.utcnow(),
+                    "errors": json.dumps([{"error": str(e), "fatal": True}]),
+                },
+            )
+            await db.commit()
+
+
+@router.post("/provincial/cross-reference")
+async def trigger_cross_reference(
+    background_tasks: BackgroundTasks,
+    request: CrossReferenceRequest | None = None,
+    user: OptionalUser = None,
+) -> dict[str, Any]:
+    """Trigger cross-referencing of provincial corporations with federal registry.
+
+    Matches provincial corporation records with federal registry data
+    using business number and name matching strategies.
+
+    Match results are classified by confidence:
+    - Auto-link (>=95%): Automatically create SAME_AS relationship
+    - Flag for review (85-95%): Requires manual verification
+    - No match (<85%): No relationship created
+
+    Args:
+        request: Cross-reference configuration (provinces, thresholds)
+    """
+    if request is None:
+        request = CrossReferenceRequest()
+
+    # Create ingestion run record
+    run_id = uuid4()
+
+    async with get_db_session() as db:
+        insert_query = text("""
+            INSERT INTO ingestion_runs (id, source, started_at, status)
+            VALUES (:id, :source, :started_at, :status)
+        """)
+
+        await db.execute(
+            insert_query,
+            {
+                "id": run_id,
+                "source": "cross-reference",
+                "started_at": datetime.utcnow(),
+                "status": "running",
+            },
+        )
+        await db.commit()
+
+    # Start background task
+    background_tasks.add_task(_run_cross_reference_task, run_id, request)
+
+    return {
+        "run_id": str(run_id),
+        "source": "cross-reference",
+        "status": "running",
+        "status_url": f"/api/v1/ingestion/runs/{run_id}",
+        "message": "Cross-referencing started",
+        "provinces": request.provinces or "all",
+        "thresholds": {
+            "auto_link": request.auto_link_threshold,
+            "review": request.review_threshold,
+        },
+    }
+
+
+@router.get("/provincial/cross-reference/review")
+async def get_cross_reference_review_items(
+    province: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    user: OptionalUser = None,
+) -> dict[str, Any]:
+    """Get matches flagged for manual review.
+
+    Returns provincial corporation records that matched with
+    85-95% confidence and require human verification.
+
+    Args:
+        province: Filter by province code (optional)
+        limit: Maximum results (default: 50)
+        offset: Pagination offset
+    """
+    async with get_db_session() as db:
+        # Query entities that have review flags
+        filters = ["metadata->>'requires_review' = 'true'"]
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+
+        if province:
+            filters.append("metadata->>'jurisdiction' = :province")
+            params["province"] = province.upper()
+
+        where_clause = " AND ".join(filters)
+
+        query = text(f"""
+            SELECT
+                id,
+                name,
+                metadata->>'provincial_record_name' as provincial_name,
+                metadata->>'matched_entity_id' as matched_id,
+                metadata->>'matched_entity_name' as matched_name,
+                CAST(metadata->>'match_score' AS float) as match_score,
+                metadata->>'match_method' as match_method,
+                metadata->>'jurisdiction' as jurisdiction
+            FROM entities
+            WHERE {where_clause}
+            ORDER BY CAST(metadata->>'match_score' AS float) DESC
+            LIMIT :limit OFFSET :offset
+        """)
+
+        result = await db.execute(query, params)
+        items = result.fetchall()
+
+        # Get total count
+        count_query = text(f"""
+            SELECT COUNT(*) as total
+            FROM entities
+            WHERE {where_clause}
+        """)
+        count_result = await db.execute(count_query, params)
+        total = count_result.fetchone().total
+
+        return {
+            "items": [
+                {
+                    "entity_id": str(item.id),
+                    "provincial_record_name": item.provincial_name or item.name,
+                    "matched_entity_id": item.matched_id,
+                    "matched_entity_name": item.matched_name,
+                    "match_score": item.match_score or 0.0,
+                    "match_method": item.match_method or "unknown",
+                    "jurisdiction": item.jurisdiction,
+                }
+                for item in items
+            ],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
+
+
+@router.post("/provincial/batch")
+async def trigger_batch_provincial_ingestion(
+    background_tasks: BackgroundTasks,
+    provinces: list[str] | None = None,
+    request: ProvincialIngestionRequest | None = None,
+    user: OptionalUser = None,
+) -> dict[str, Any]:
+    """Trigger batch ingestion for multiple provinces.
+
+    Starts ingestion for all specified provinces (or all bulk-data
+    provinces if not specified).
+
+    Note: Only provinces with bulk data (QC) are included by default.
+    Targeted provinces require CSV files and cannot be batched.
+
+    Args:
+        provinces: List of province codes (default: all bulk-data provinces)
+        request: Shared ingestion configuration
+    """
+    if provinces is None:
+        provinces = BULK_DATA_PROVINCES
+
+    if request is None:
+        request = ProvincialIngestionRequest()
+
+    # Validate provinces
+    invalid = [p for p in provinces if p.upper() not in BULK_DATA_PROVINCES]
+    if invalid:
+        raise ValidationError(
+            f"Batch ingestion only supports bulk-data provinces. "
+            f"Invalid: {invalid}. Valid: {BULK_DATA_PROVINCES}"
+        )
+
+    # Create run records and start tasks
+    runs = []
+    for province in provinces:
+        province = province.upper()
+        run_id = uuid4()
+        source_name = f"{province.lower()}-corps"
+
+        async with get_db_session() as db:
+            insert_query = text("""
+                INSERT INTO ingestion_runs (id, source, started_at, status)
+                VALUES (:id, :source, :started_at, :status)
+            """)
+
+            await db.execute(
+                insert_query,
+                {
+                    "id": run_id,
+                    "source": source_name,
+                    "started_at": datetime.utcnow(),
+                    "status": "running",
+                },
+            )
+            await db.commit()
+
+        background_tasks.add_task(
+            _run_provincial_ingestion_task, province, run_id, request
+        )
+
+        runs.append({
+            "run_id": str(run_id),
+            "province": province,
+            "source": source_name,
+            "status": "running",
+            "status_url": f"/api/v1/ingestion/runs/{run_id}",
+        })
+
+    return {
+        "message": f"Batch ingestion started for {len(runs)} provinces",
+        "runs": runs,
     }
