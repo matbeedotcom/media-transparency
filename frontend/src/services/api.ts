@@ -1094,4 +1094,112 @@ export const deferMatch = async (matchId: string, notes?: string): Promise<Entit
   return response.data;
 };
 
+// =========================
+// Autocomplete API
+// =========================
+
+export interface AutocompleteSuggestion {
+  name: string;
+  entity_type: string;
+  source: string;
+  id: string | null;
+  jurisdiction: string | null;
+}
+
+export interface AutocompleteResponse {
+  suggestions: AutocompleteSuggestion[];
+  query: string;
+  total: number;
+}
+
+export const autocompleteEntities = async (
+  query: string,
+  options?: { limit?: number; types?: string }
+): Promise<AutocompleteResponse> => {
+  if (query.length < 2) {
+    return { suggestions: [], query, total: 0 };
+  }
+  const response = await apiClient.get('/ingestion/autocomplete', {
+    params: { q: query, ...options },
+  });
+  return response.data;
+};
+
+// =========================
+// Quick Ingest API
+// =========================
+
+export interface QuickIngestRequest {
+  name: string;
+  jurisdiction?: string;
+  identifiers?: Record<string, string>;
+  discover_executives?: boolean;
+}
+
+export interface QuickIngestResponse {
+  found: boolean;
+  entity_id: string | null;
+  entity_name: string | null;
+  source: string | null;
+  sources_searched: string[];
+  external_matches: Array<{
+    name: string;
+    source: string;
+    identifiers: Record<string, string>;
+    jurisdiction: string | null;
+    status: string | null;
+    address: string | null;
+  }>;
+  message: string;
+  // LinkedIn executive discovery
+  linkedin_available: boolean;
+  linkedin_company_url: string | null;
+  executives_hint: string | null;
+}
+
+export const quickIngestCorporation = async (
+  request: QuickIngestRequest
+): Promise<QuickIngestResponse> => {
+  const response = await apiClient.post('/ingestion/quick-ingest', request);
+  return response.data;
+};
+
+// LinkedIn Status & Ingestion
+export interface LinkedInStatus {
+  configured: boolean;
+  message: string;
+  methods_available: string[];
+}
+
+export const getLinkedInStatus = async (): Promise<LinkedInStatus> => {
+  const response = await apiClient.get('/ingestion/linkedin/status');
+  return response.data;
+};
+
+export interface LinkedInIngestionRequest {
+  company_name?: string;
+  company_url?: string;
+  company_entity_id?: string;
+  csv_data?: string;  // Base64-encoded CSV
+  scrape?: boolean;
+  session_cookie?: string;
+  titles_filter?: string[];
+  limit?: number;
+}
+
+export interface LinkedInIngestionResponse {
+  run_id: string;
+  status: string;
+  message: string;
+  profiles_found?: number;
+  executives_found?: number;
+}
+
+export const ingestLinkedIn = async (
+  request: LinkedInIngestionRequest
+): Promise<LinkedInIngestionResponse> => {
+  const response = await apiClient.post('/ingestion/linkedin', request);
+  return response.data;
+};
+
 export default apiClient;

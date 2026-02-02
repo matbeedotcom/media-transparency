@@ -1634,6 +1634,11 @@ def ingest_elections_canada(
     is_flag=True,
     help="Use minimal fields (for debugging permission issues)",
 )
+@click.option(
+    "--enrich-page-details",
+    is_flag=True,
+    help="Fetch Facebook Page details (contact info, social links, managing orgs)",
+)
 def ingest_meta_ads(
     days_back: int,
     countries: str | None,
@@ -1643,12 +1648,19 @@ def ingest_meta_ads(
     limit: int | None,
     verbose: bool,
     minimal_fields: bool,
+    enrich_page_details: bool,
 ):
     """Ingest political ads from Meta Ad Library.
 
     Fetches political and social issue ads from Meta's Ad Library API
     for the US and Canada. Creates Ad nodes, Sponsor entities, and
     SPONSORED_BY relationships.
+
+    With --enrich-page-details, also fetches Facebook Page information:
+    - Contact info (website, email, phone, WhatsApp)
+    - Social links (Instagram, YouTube, Twitter/X)
+    - Managing organizations (agencies, businesses)
+    - Page stats (followers, verification status)
 
     Requires META_ACCESS_TOKEN environment variable (or META_APP_ID +
     META_APP_SECRET for token refresh). Your app must also have completed
@@ -1672,6 +1684,9 @@ def ingest_meta_ads(
 
         # Debug permission issues with minimal fields
         mitds ingest meta-ads --search-terms "test" --minimal-fields --limit 5
+        
+        # Fetch ads with full Facebook Page details
+        mitds ingest meta-ads --search-terms "coalition" --enrich-page-details
     """
     from ..ingestion.meta_ads import run_meta_ads_ingestion
 
@@ -1701,6 +1716,8 @@ def ingest_meta_ads(
             click.echo(f"  Limit: {limit} ads")
         if minimal_fields:
             click.echo("  Minimal fields: enabled (debugging mode)")
+        if enrich_page_details:
+            click.echo("  Page details enrichment: enabled")
 
     start_time = datetime.now()
 
@@ -1714,6 +1731,7 @@ def ingest_meta_ads(
                 search_terms=search_terms_list,
                 page_ids=page_ids_list,
                 minimal_fields=minimal_fields,
+                enrich_page_details=enrich_page_details,
             )
         )
 
@@ -1725,9 +1743,360 @@ def ingest_meta_ads(
         # Likely missing credentials
         click.echo(f"Configuration error: {e}", err=True)
         click.echo("\nTo use the Meta Ad Library API, set one of:", err=True)
-        click.echo("  - META_ACCESS_TOKEN (recommended)", err=True)
-        click.echo("  - META_APP_ID + META_APP_SECRET", err=True)
+        click.echo("  - META_APP_ID + META_APP_SECRET (recommended - auto-generates token)", err=True)
+        click.echo("  - META_ACCESS_TOKEN (for User/System User tokens)", err=True)
+        click.echo("\nGet your App ID and Secret from: https://developers.facebook.com/apps/", err=True)
         sys.exit(1)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        if verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
+@cli.command(name="meta-token")
+@click.option(
+    "--extend",
+    type=str,
+    default=None,
+    help="Short-lived token to exchange for a long-lived token (60 days)",
+)
+@click.option(
+    "--debug",
+    type=str,
+    default=None,
+    help="Token to debug/inspect",
+)
+@click.option(
+    "--save-to-env",
+    is_flag=True,
+    help="Save the new token to backend/.env file",
+)
+def meta_token_command(
+    extend: str | None,
+    debug: str | None,
+    save_to_env: bool,
+):
+    """Manage Meta (Facebook) access tokens.
+
+    The Meta Ad Library API requires a User Access Token (not just App credentials).
+    This command helps you:
+    
+    1. Exchange a short-lived token for a long-lived token (60 days)
+    2. Debug/inspect a token to see its expiration and permissions
+    3. Optionally save the new token to your .env file
+
+    HOW TO GET A SHORT-LIVED TOKEN:
+    
+    1. Go to: https://developers.facebook.com/tools/explorer/
+    2. Select your app from the dropdown
+    3. Click "Generate Access Token"
+    4. Grant the required permissions (ads_read)
+    5. Copy the token and use with --extend
+
+    Examples:
+
+        # Exchange short-lived token for long-lived (60 days):
+        mitds ingest meta-token --extend "EAAxxxxxx..."
+
+        # Exchange and save to .env automatically:
+        mitds ingest meta-token --extend "EAAxxxxxx..." --save-to-env
+
+        # Debug a token to see its expiration:
+        mitds ingest meta-token --debug "EAAxxxxxx..."
+    """
+    import httpx
+    from ..config import get_settings
+    
+    settings = get_settings()
+    
+    if not settings.meta_app_id or not settings.meta_app_secret:
+        click.echo("Error: META_APP_ID and META_APP_SECRET must be set in .env", err=True)
+        sys.exit(1)
+    
+    if extend:
+        click.echo("Exchanging short-lived token for long-lived token...")
+        
+        # Exchange for long-lived token
+        url = "https://graph.facebook.com/v24.0/oauth/access_token"
+        params = {
+            "grant_type": "fb_exchange_token",
+            "client_id": settings.meta_app_id,
+            "client_secret": settings.meta_app_secret,
+            "fb_exchange_token": extend,
+        }
+        
+        try:
+            response = httpx.get(url, params=params, timeout=30)
+            
+            if response.status_code != 200:
+                try:
+                    error = response.json().get("error", {})
+                    click.echo(f"\nError: {error.get('message', response.text)}", err=True)
+                    click.echo(f"Error code: {error.get('code')}", err=True)
+                except Exception:
+                    click.echo(f"\nError: {response.text}", err=True)
+                sys.exit(1)
+            
+            data = response.json()
+            new_token = data["access_token"]
+            expires_in = data.get("expires_in", 5184000)  # Default 60 days
+            
+            # Calculate expiry date
+            from datetime import timedelta
+            expiry_date = datetime.now() + timedelta(seconds=expires_in)
+            
+            click.echo(f"\n{'='*60}")
+            click.echo("SUCCESS! Long-lived token generated")
+            click.echo(f"{'='*60}")
+            click.echo(f"\nExpires: {expiry_date.strftime('%Y-%m-%d %H:%M')} ({expires_in // 86400} days)")
+            click.echo(f"\nToken:\n{new_token}")
+            
+            if save_to_env:
+                # Update .env file
+                env_path = "backend/.env"
+                try:
+                    with open(env_path, "r") as f:
+                        env_content = f.read()
+                    
+                    # Check if META_ACCESS_TOKEN exists
+                    import re
+                    if re.search(r"^#?\s*META_ACCESS_TOKEN=", env_content, re.MULTILINE):
+                        # Replace existing (including commented out)
+                        env_content = re.sub(
+                            r"^#?\s*META_ACCESS_TOKEN=.*$",
+                            f"META_ACCESS_TOKEN={new_token}",
+                            env_content,
+                            flags=re.MULTILINE
+                        )
+                    else:
+                        # Add new line after META_APP_SECRET
+                        env_content = re.sub(
+                            r"(META_APP_SECRET=.*?)(\n)",
+                            f"\\1\\2META_ACCESS_TOKEN={new_token}\\2",
+                            env_content
+                        )
+                    
+                    with open(env_path, "w") as f:
+                        f.write(env_content)
+                    
+                    click.echo(f"\n✓ Token saved to {env_path}")
+                    click.echo("  Restart your server to use the new token.")
+                except Exception as e:
+                    click.echo(f"\nWarning: Could not save to {env_path}: {e}", err=True)
+                    click.echo("Please manually add to your .env:")
+                    click.echo(f"META_ACCESS_TOKEN={new_token}")
+            else:
+                click.echo(f"\nTo use this token, add to your .env file:")
+                click.echo(f"META_ACCESS_TOKEN={new_token}")
+                click.echo(f"\nOr run with --save-to-env to auto-update .env")
+                
+        except httpx.RequestError as e:
+            click.echo(f"Network error: {e}", err=True)
+            sys.exit(1)
+    
+    elif debug:
+        click.echo("Debugging token...")
+        
+        url = "https://graph.facebook.com/debug_token"
+        params = {
+            "input_token": debug,
+            "access_token": f"{settings.meta_app_id}|{settings.meta_app_secret}",
+        }
+        
+        try:
+            response = httpx.get(url, params=params, timeout=30)
+            data = response.json()
+            
+            if "error" in data:
+                click.echo(f"\nError: {data['error'].get('message')}", err=True)
+                sys.exit(1)
+            
+            token_data = data.get("data", {})
+            
+            click.echo(f"\n{'='*60}")
+            click.echo("TOKEN INFO")
+            click.echo(f"{'='*60}")
+            click.echo(f"App ID: {token_data.get('app_id', 'N/A')}")
+            click.echo(f"Type: {token_data.get('type', 'N/A')}")
+            click.echo(f"Valid: {token_data.get('is_valid', False)}")
+            
+            if token_data.get("expires_at"):
+                expiry = datetime.fromtimestamp(token_data["expires_at"])
+                days_left = (expiry - datetime.now()).days
+                click.echo(f"Expires: {expiry.strftime('%Y-%m-%d %H:%M')} ({days_left} days left)")
+            elif token_data.get("data_access_expires_at"):
+                expiry = datetime.fromtimestamp(token_data["data_access_expires_at"])
+                click.echo(f"Data access expires: {expiry.strftime('%Y-%m-%d %H:%M')}")
+            else:
+                click.echo("Expires: Never (or not specified)")
+            
+            if token_data.get("scopes"):
+                click.echo(f"Permissions: {', '.join(token_data['scopes'])}")
+            
+            if not token_data.get("is_valid"):
+                error = token_data.get("error", {})
+                click.echo(f"\nInvalid reason: {error.get('message', 'Unknown')}")
+                
+        except httpx.RequestError as e:
+            click.echo(f"Network error: {e}", err=True)
+            sys.exit(1)
+    
+    else:
+        # Show help on how to get a token
+        click.echo("Meta Ad Library Token Helper")
+        click.echo("="*60)
+        click.echo("\nThe Meta Ad Library API requires a User Access Token.")
+        click.echo("Here's how to get one:\n")
+        click.echo("1. Go to: https://developers.facebook.com/tools/explorer/")
+        click.echo("2. Select your app from the 'Meta App' dropdown")
+        click.echo("3. Click 'Generate Access Token'")
+        click.echo("4. Approve permissions if prompted")
+        click.echo("5. Copy the generated token\n")
+        click.echo("Then exchange it for a long-lived token (60 days):")
+        click.echo('  mitds ingest meta-token --extend "YOUR_TOKEN" --save-to-env\n')
+        click.echo("To check when your current token expires:")
+        click.echo('  mitds ingest meta-token --debug "YOUR_TOKEN"')
+
+
+@cli.command(name="meta-page-details")
+@click.option(
+    "--page-id",
+    type=str,
+    default=None,
+    help="Facebook Page ID to fetch details for",
+)
+@click.option(
+    "--sponsor-name",
+    type=str,
+    default=None,
+    help="Sponsor name to search for and enrich",
+)
+@click.option(
+    "--include-agencies/--no-agencies",
+    default=True,
+    help="Include managing organizations (default: yes)",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Enable verbose output",
+)
+def fetch_meta_page_details(
+    page_id: str | None,
+    sponsor_name: str | None,
+    include_agencies: bool,
+    verbose: bool,
+):
+    """Fetch Facebook Page details for a sponsor.
+
+    Retrieves detailed information about a Facebook Page including:
+    - Contact info (website, email, phone, WhatsApp)
+    - Social links (Instagram, YouTube, Twitter/X)
+    - Managing organizations (agencies, businesses)
+    - Page stats (followers, verification status)
+
+    You can either:
+    - Provide a --page-id directly
+    - Provide a --sponsor-name to search for and enrich
+
+    Examples:
+
+        # Fetch details by page ID
+        mitds ingest meta-page-details --page-id "123456789"
+
+        # Search for a sponsor and fetch their page details
+        mitds ingest meta-page-details --sponsor-name "National Citizens Coalition"
+
+        # Verbose output with all details
+        mitds ingest meta-page-details --page-id "123456789" -v
+    """
+    from ..ingestion.meta_ads import (
+        fetch_facebook_page_details,
+        search_and_enrich_sponsor,
+    )
+
+    if not page_id and not sponsor_name:
+        click.echo("Error: Either --page-id or --sponsor-name is required", err=True)
+        sys.exit(1)
+
+    try:
+        if page_id:
+            click.echo(f"Fetching Facebook Page details for ID: {page_id}")
+            details = asyncio.run(fetch_facebook_page_details(page_id, include_agencies))
+
+            if details:
+                click.echo(f"\nPage: {details.page_name}")
+                if details.username:
+                    click.echo(f"Username: @{details.username}")
+                if details.category:
+                    click.echo(f"Category: {details.category}")
+                if details.verification_status:
+                    click.echo(f"Verification: {details.verification_status}")
+                if details.followers_count:
+                    click.echo(f"Followers: {details.followers_count:,}")
+
+                # Contact info
+                click.echo("\nContact Information:")
+                if details.contact.website:
+                    click.echo(f"  Website: {details.contact.website}")
+                if details.contact.websites and len(details.contact.websites) > 1:
+                    click.echo(f"  All websites: {', '.join(details.contact.websites)}")
+                if details.contact.emails:
+                    click.echo(f"  Emails: {', '.join(details.contact.emails)}")
+                if details.contact.phone:
+                    click.echo(f"  Phone: {details.contact.phone}")
+                if details.contact.whatsapp_number:
+                    click.echo(f"  WhatsApp: {details.contact.whatsapp_number}")
+                if details.contact.address:
+                    click.echo(f"  Address: {details.contact.address}")
+
+                # Social links
+                click.echo("\nSocial Links:")
+                if details.social_links.facebook_url:
+                    click.echo(f"  Facebook: {details.social_links.facebook_url}")
+                if details.social_links.instagram_username:
+                    click.echo(f"  Instagram: @{details.social_links.instagram_username}")
+                if details.social_links.twitter_handle:
+                    click.echo(f"  Twitter/X: @{details.social_links.twitter_handle}")
+                if details.social_links.youtube_url:
+                    click.echo(f"  YouTube: {details.social_links.youtube_url}")
+
+                # Managing organizations
+                if details.managing_organizations:
+                    click.echo("\nManaging Organizations:")
+                    for org in details.managing_organizations:
+                        click.echo(f"  - {org.name} ({org.type})")
+
+                if verbose:
+                    click.echo("\nAbout:")
+                    if details.about:
+                        click.echo(f"  {details.about}")
+                    if details.description:
+                        click.echo(f"\nDescription:\n  {details.description}")
+            else:
+                click.echo("Could not fetch page details (may require additional permissions)")
+
+        elif sponsor_name:
+            click.echo(f"Searching for sponsor: {sponsor_name}")
+            result = asyncio.run(search_and_enrich_sponsor(sponsor_name))
+
+            click.echo(f"\nAds found: {result['ads_found']}")
+            if result['page_id']:
+                click.echo(f"Page ID: {result['page_id']}")
+            click.echo(f"Enriched: {'Yes' if result['enriched'] else 'No'}")
+
+            if result['page_details'] and verbose:
+                details = result['page_details']
+                click.echo(f"\nPage Details:")
+                click.echo(f"  Name: {details.get('page_name', 'N/A')}")
+                if details.get('contact', {}).get('website'):
+                    click.echo(f"  Website: {details['contact']['website']}")
+                if details.get('social_links', {}).get('twitter_handle'):
+                    click.echo(f"  Twitter: @{details['social_links']['twitter_handle']}")
+
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         if verbose:

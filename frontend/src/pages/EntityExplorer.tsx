@@ -5,7 +5,7 @@
  */
 
 import { useState, useCallback } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation } from '@tanstack/react-query';
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
 import {
   searchEntities,
@@ -19,10 +19,16 @@ import {
   getFundingSources,
   getConnectingEntities,
   getSharedFunders,
+  quickIngestCorporation,
+  ingestLinkedIn,
+  getLinkedInStatus,
   type Entity,
   type Relationship,
   type BoardInterlock,
   type EntitySummary,
+  type QuickIngestResponse,
+  type LinkedInIngestionResponse,
+  type LinkedInStatus,
 } from '../services/api';
 import { EntityGraph, InfrastructureOverlap } from '../components/graph';
 import { EvidencePanel } from '../components/evidence';
@@ -82,6 +88,19 @@ export default function EntityExplorer() {
   const [sharedFunderIds, setSharedFunderIds] = useState<EntitySummary[]>([]);
   const [sharedFunderSearch, setSharedFunderSearch] = useState('');
   const [showSharedFunders, setShowSharedFunders] = useState(false);
+
+  // Quick ingest state
+  const [quickIngestJurisdiction, setQuickIngestJurisdiction] = useState<string>('');
+  const [quickIngestResult, setQuickIngestResult] = useState<QuickIngestResponse | null>(null);
+  const [discoverExecutives, setDiscoverExecutives] = useState<boolean>(false);
+  
+  // LinkedIn discovery modal state
+  const [showLinkedInModal, setShowLinkedInModal] = useState(false);
+  const [linkedInMethod, setLinkedInMethod] = useState<'csv' | 'scrape'>('csv');
+  const [linkedInCsvFile, setLinkedInCsvFile] = useState<File | null>(null);
+  const [linkedInSessionCookie, setLinkedInSessionCookie] = useState('');
+  const [linkedInTitlesFilter, setLinkedInTitlesFilter] = useState('CEO,CFO,Director,President,VP,Board');
+  const [linkedInStatus, setLinkedInStatus] = useState<LinkedInStatus | null>(null);
 
   // Search entities
   const { data: searchResults, isLoading: searchLoading } = useQuery({
@@ -188,6 +207,92 @@ export default function EntityExplorer() {
     }),
     enabled: showSharedFunders && sharedFunderIds.length >= 2,
   });
+
+  // Quick ingest mutation
+  const quickIngestMutation = useMutation({
+    mutationFn: quickIngestCorporation,
+    onSuccess: (data) => {
+      setQuickIngestResult(data);
+      if (data.found && data.entity_id) {
+        // Navigate to the newly ingested entity
+        handleEntitySelect(data.entity_id);
+      }
+    },
+  });
+
+  // LinkedIn ingestion mutation
+  const [linkedInResult, setLinkedInResult] = useState<LinkedInIngestionResponse | null>(null);
+  const linkedInMutation = useMutation({
+    mutationFn: ingestLinkedIn,
+    onSuccess: (data) => {
+      setLinkedInResult(data);
+      if (data.status === 'completed' || data.status === 'running') {
+        // Refresh the entity to show new relationships
+        if (quickIngestResult?.entity_id) {
+          handleEntitySelect(quickIngestResult.entity_id);
+        }
+      }
+    },
+  });
+
+  // Handle LinkedIn CSV file selection
+  const handleLinkedInCsvSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setLinkedInCsvFile(file);
+    }
+  };
+
+  // Fetch LinkedIn status when modal opens
+  const handleOpenLinkedInModal = async () => {
+    setShowLinkedInModal(true);
+    try {
+      const status = await getLinkedInStatus();
+      setLinkedInStatus(status);
+      // If cookie is configured on server, default to scrape method
+      if (status.configured) {
+        setLinkedInMethod('scrape');
+      }
+    } catch {
+      // If API fails, assume no cookie configured
+      setLinkedInStatus({ configured: false, message: 'Could not check status', methods_available: ['csv_import'] });
+    }
+  };
+
+  // Submit LinkedIn ingestion
+  const handleLinkedInSubmit = async () => {
+    if (!quickIngestResult?.entity_name) return;
+
+    const titlesArray = linkedInTitlesFilter
+      .split(',')
+      .map(t => t.trim())
+      .filter(t => t.length > 0);
+
+    if (linkedInMethod === 'csv' && linkedInCsvFile) {
+      // Read file as base64
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64 = (reader.result as string).split(',')[1];
+        linkedInMutation.mutate({
+          company_name: quickIngestResult.entity_name!,
+          company_entity_id: quickIngestResult.entity_id || undefined,
+          csv_data: base64,
+          titles_filter: titlesArray,
+        });
+      };
+      reader.readAsDataURL(linkedInCsvFile);
+    } else if (linkedInMethod === 'scrape') {
+      // Cookie may be configured on server, or provided in UI
+      linkedInMutation.mutate({
+        company_name: quickIngestResult.entity_name!,
+        company_entity_id: quickIngestResult.entity_id || undefined,
+        scrape: true,
+        session_cookie: linkedInSessionCookie || undefined, // Server will use env var if not provided
+        titles_filter: titlesArray,
+        limit: 50,
+      });
+    }
+  };
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -316,6 +421,109 @@ export default function EntityExplorer() {
             ) : searchParams.get('q') ? (
               <div className="empty-state">
                 <p>No entities found matching your search.</p>
+                
+                {/* Quick Ingest Option */}
+                <div className="quick-ingest-panel">
+                  <h4>Not in the database?</h4>
+                  <p>Search public records to add this corporation:</p>
+                  
+                  <div className="quick-ingest-form">
+                    <select
+                      value={quickIngestJurisdiction}
+                      onChange={(e) => setQuickIngestJurisdiction(e.target.value)}
+                      aria-label="Select jurisdiction"
+                    >
+                      <option value="">Any jurisdiction</option>
+                      <option value="CA">Canada (Federal)</option>
+                      <option value="US">United States</option>
+                      <option value="ON">Ontario</option>
+                      <option value="BC">British Columbia</option>
+                      <option value="AB">Alberta</option>
+                      <option value="QC">Quebec</option>
+                    </select>
+                    
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => quickIngestMutation.mutate({
+                        name: searchParams.get('q') || '',
+                        jurisdiction: quickIngestJurisdiction || undefined,
+                        discover_executives: discoverExecutives,
+                      })}
+                      disabled={quickIngestMutation.isPending}
+                    >
+                      {quickIngestMutation.isPending ? 'Searching...' : 'Search & Ingest'}
+                    </button>
+                  </div>
+                  
+                  <label className="discover-executives-toggle">
+                    <input
+                      type="checkbox"
+                      checked={discoverExecutives}
+                      onChange={(e) => setDiscoverExecutives(e.target.checked)}
+                    />
+                    <span>Also discover executives via LinkedIn</span>
+                  </label>
+
+                  {/* Quick Ingest Results */}
+                  {quickIngestResult && (
+                    <div className={`quick-ingest-result ${quickIngestResult.found ? 'success' : 'info'}`}>
+                      <p>{quickIngestResult.message}</p>
+                      
+                      {quickIngestResult.found && quickIngestResult.entity_id && (
+                        <div className="ingest-actions">
+                          <button
+                            type="button"
+                            className="btn btn-link"
+                            onClick={() => handleEntitySelect(quickIngestResult.entity_id!)}
+                          >
+                            View {quickIngestResult.entity_name} →
+                          </button>
+                          
+                          {quickIngestResult.linkedin_available && (
+                            <button
+                              type="button"
+                              className="btn btn-linkedin"
+                              onClick={handleOpenLinkedInModal}
+                            >
+                              Discover Executives
+                            </button>
+                          )}
+                        </div>
+                      )}
+                      
+                      {quickIngestResult.sources_searched.length > 0 && (
+                        <p className="text-muted sources-list">
+                          Searched: {quickIngestResult.sources_searched.join(', ')}
+                        </p>
+                      )}
+                      
+                      {/* Show external matches if no direct ingestion */}
+                      {!quickIngestResult.found && quickIngestResult.external_matches.length > 0 && (
+                        <div className="external-matches">
+                          <p>Possible matches found:</p>
+                          <ul>
+                            {quickIngestResult.external_matches.map((match, i) => (
+                              <li key={i}>
+                                <strong>{match.name}</strong>
+                                <span className="match-source">({match.source})</span>
+                                {match.jurisdiction && (
+                                  <span className="match-jurisdiction">{match.jurisdiction}</span>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  
+                  {quickIngestMutation.isError && (
+                    <div className="quick-ingest-result error">
+                      <p>Error searching public records. Please try again.</p>
+                    </div>
+                  )}
+                </div>
               </div>
             ) : (
               <div className="empty-state">
@@ -1108,6 +1316,161 @@ export default function EntityExplorer() {
         </div>
       </div>
 
+      {/* LinkedIn Discovery Modal */}
+      {showLinkedInModal && (
+        <div className="modal-overlay" onClick={() => setShowLinkedInModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Discover Executives via LinkedIn</h3>
+              <button
+                type="button"
+                className="modal-close"
+                onClick={() => setShowLinkedInModal(false)}
+              >
+                ×
+              </button>
+            </div>
+            
+            <div className="modal-body">
+              <p className="modal-description">
+                Import LinkedIn data for <strong>{quickIngestResult?.entity_name}</strong> to discover
+                executives, board members, and key personnel.
+              </p>
+
+              {/* Method Selection */}
+              <div className="linkedin-method-tabs">
+                <button
+                  type="button"
+                  className={`method-tab ${linkedInMethod === 'csv' ? 'active' : ''}`}
+                  onClick={() => setLinkedInMethod('csv')}
+                >
+                  CSV Import
+                </button>
+                <button
+                  type="button"
+                  className={`method-tab ${linkedInMethod === 'scrape' ? 'active' : ''}`}
+                  onClick={() => setLinkedInMethod('scrape')}
+                >
+                  Browser Scrape
+                </button>
+              </div>
+
+              {linkedInMethod === 'csv' ? (
+                <div className="linkedin-csv-section">
+                  <p className="method-help">
+                    Upload a CSV exported from LinkedIn Sales Navigator or company page.
+                    <br />
+                    <span className="text-muted">Required columns: Name, Title, LinkedIn URL</span>
+                  </p>
+                  <input
+                    type="file"
+                    accept=".csv"
+                    onChange={handleLinkedInCsvSelect}
+                    className="csv-input"
+                  />
+                  {linkedInCsvFile && (
+                    <p className="file-selected">Selected: {linkedInCsvFile.name}</p>
+                  )}
+                </div>
+              ) : (
+                <div className="linkedin-scrape-section">
+                  {linkedInStatus?.configured ? (
+                    <div className="cookie-configured">
+                      <span className="status-badge success">Cookie Configured</span>
+                      <p className="method-help">
+                        Your LinkedIn session cookie is configured on the server.
+                        <br />
+                        <span className="text-muted">Ready to scrape company profiles.</span>
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <p className="method-help">
+                        Scrape public profiles from the company page.
+                        <br />
+                        <span className="text-muted">Requires your LinkedIn session cookie (li_at)</span>
+                      </p>
+                      <label>
+                        Session Cookie (li_at):
+                        <input
+                          type="password"
+                          value={linkedInSessionCookie}
+                          onChange={(e) => setLinkedInSessionCookie(e.target.value)}
+                          placeholder="AQED..."
+                          className="cookie-input"
+                        />
+                      </label>
+                      <p className="cookie-help">
+                        <strong>How to get your cookie:</strong><br />
+                        1. Go to linkedin.com (logged in)<br />
+                        2. Press F12 → Application tab → Cookies<br />
+                        3. Find <code>li_at</code> and copy its value<br />
+                        <br />
+                        <em>Tip: Add to <code>.env</code> file as LINKEDIN_SESSION_COOKIE for persistence</em>
+                      </p>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Titles Filter */}
+              <div className="titles-filter">
+                <label>
+                  Filter by titles (comma-separated):
+                  <input
+                    type="text"
+                    value={linkedInTitlesFilter}
+                    onChange={(e) => setLinkedInTitlesFilter(e.target.value)}
+                    placeholder="CEO, CFO, Director, VP..."
+                  />
+                </label>
+              </div>
+
+              {/* Results */}
+              {linkedInResult && (
+                <div className={`linkedin-result ${linkedInResult.status === 'completed' ? 'success' : linkedInResult.status === 'running' ? 'info' : 'error'}`}>
+                  <p>{linkedInResult.message}</p>
+                  {linkedInResult.profiles_found !== undefined && (
+                    <p>Profiles found: {linkedInResult.profiles_found}</p>
+                  )}
+                  {linkedInResult.executives_found !== undefined && (
+                    <p>Executives matched: {linkedInResult.executives_found}</p>
+                  )}
+                </div>
+              )}
+
+              {linkedInMutation.isError && (
+                <div className="linkedin-result error">
+                  <p>Error: {(linkedInMutation.error as Error)?.message || 'Failed to ingest LinkedIn data'}</p>
+                </div>
+              )}
+            </div>
+
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setShowLinkedInModal(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleLinkedInSubmit}
+                disabled={
+                  linkedInMutation.isPending ||
+                  (linkedInMethod === 'csv' && !linkedInCsvFile) ||
+                  (linkedInMethod === 'scrape' && !linkedInSessionCookie && !linkedInStatus?.configured)
+                }
+              >
+                {linkedInMutation.isPending ? 'Importing...' : 'Import Executives'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <style>{`
         .search-form {
           display: flex;
@@ -1536,8 +1899,410 @@ export default function EntityExplorer() {
           color: var(--text-muted);
           min-height: 200px;
           display: flex;
+          flex-direction: column;
           align-items: center;
           justify-content: center;
+          gap: var(--spacing-md);
+        }
+
+        .quick-ingest-panel {
+          margin-top: var(--spacing-md);
+          padding: var(--spacing-md);
+          background: var(--bg-tertiary);
+          border-radius: var(--border-radius);
+          text-align: left;
+          width: 100%;
+          max-width: 400px;
+        }
+
+        .quick-ingest-panel h4 {
+          margin: 0 0 var(--spacing-xs);
+          color: var(--text-primary);
+          font-size: 0.9rem;
+        }
+
+        .quick-ingest-panel > p {
+          margin: 0 0 var(--spacing-sm);
+          font-size: 0.8rem;
+        }
+
+        .quick-ingest-form {
+          display: flex;
+          gap: var(--spacing-sm);
+          margin-bottom: var(--spacing-sm);
+        }
+
+        .quick-ingest-form select {
+          flex: 1;
+          padding: var(--spacing-xs) var(--spacing-sm);
+          border: 1px solid var(--border-color);
+          border-radius: var(--border-radius);
+          background: var(--bg-primary);
+          font-size: 0.8rem;
+        }
+
+        .quick-ingest-result {
+          padding: var(--spacing-sm);
+          border-radius: var(--border-radius);
+          font-size: 0.8rem;
+          margin-top: var(--spacing-sm);
+        }
+
+        .quick-ingest-result.success {
+          background: rgba(16, 185, 129, 0.1);
+          border: 1px solid #10B981;
+          color: #065F46;
+        }
+
+        .quick-ingest-result.info {
+          background: rgba(59, 130, 246, 0.1);
+          border: 1px solid #3B82F6;
+          color: #1E40AF;
+        }
+
+        .quick-ingest-result.error {
+          background: rgba(239, 68, 68, 0.1);
+          border: 1px solid #EF4444;
+          color: #991B1B;
+        }
+
+        .quick-ingest-result p {
+          margin: 0 0 var(--spacing-xs);
+        }
+
+        .quick-ingest-result .sources-list {
+          font-size: 0.7rem;
+          margin-top: var(--spacing-xs);
+        }
+
+        .external-matches {
+          margin-top: var(--spacing-sm);
+        }
+
+        .external-matches ul {
+          margin: var(--spacing-xs) 0 0;
+          padding-left: var(--spacing-md);
+        }
+
+        .external-matches li {
+          margin-bottom: var(--spacing-xs);
+        }
+
+        .match-source {
+          font-size: 0.7rem;
+          color: var(--text-muted);
+          margin-left: var(--spacing-xs);
+        }
+
+        .match-jurisdiction {
+          font-size: 0.65rem;
+          padding: 2px 4px;
+          background: var(--bg-secondary);
+          border-radius: 4px;
+          margin-left: var(--spacing-xs);
+        }
+
+        .btn-link {
+          background: none;
+          border: none;
+          color: var(--color-primary);
+          cursor: pointer;
+          padding: 0;
+          font-size: 0.8rem;
+          text-decoration: underline;
+        }
+
+        .btn-link:hover {
+          color: var(--color-primary-dark);
+        }
+
+        .discover-executives-toggle {
+          display: flex;
+          align-items: center;
+          gap: var(--spacing-xs);
+          font-size: 0.75rem;
+          color: var(--text-secondary);
+          cursor: pointer;
+          margin-top: var(--spacing-xs);
+        }
+
+        .discover-executives-toggle input {
+          width: 14px;
+          height: 14px;
+          cursor: pointer;
+        }
+
+        .ingest-actions {
+          display: flex;
+          gap: var(--spacing-sm);
+          align-items: center;
+          flex-wrap: wrap;
+        }
+
+        .linkedin-link {
+          font-size: 0.75rem;
+          color: #0A66C2;
+          text-decoration: none;
+          padding: 2px 6px;
+          background: rgba(10, 102, 194, 0.1);
+          border-radius: 4px;
+        }
+
+        .linkedin-link:hover {
+          background: rgba(10, 102, 194, 0.2);
+        }
+
+        .executives-hint {
+          font-size: 0.7rem;
+          margin-top: var(--spacing-xs);
+          padding: var(--spacing-xs);
+          background: rgba(139, 92, 246, 0.1);
+          border-radius: 4px;
+          color: #6D28D9;
+        }
+
+        .executives-hint strong {
+          color: #5B21B6;
+        }
+
+        .btn-linkedin {
+          background: #0A66C2;
+          color: white;
+          border: none;
+          padding: 4px 10px;
+          border-radius: 4px;
+          font-size: 0.75rem;
+          cursor: pointer;
+        }
+
+        .btn-linkedin:hover {
+          background: #004182;
+        }
+
+        /* Modal Styles */
+        .modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background: rgba(0, 0, 0, 0.5);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 1000;
+        }
+
+        .modal-content {
+          background: var(--bg-primary);
+          border-radius: var(--border-radius);
+          box-shadow: var(--shadow-lg);
+          width: 90%;
+          max-width: 500px;
+          max-height: 90vh;
+          overflow-y: auto;
+        }
+
+        .modal-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: var(--spacing-md);
+          border-bottom: 1px solid var(--border-color);
+        }
+
+        .modal-header h3 {
+          margin: 0;
+          font-size: 1.1rem;
+        }
+
+        .modal-close {
+          background: none;
+          border: none;
+          font-size: 1.5rem;
+          cursor: pointer;
+          color: var(--text-muted);
+          padding: 0;
+          line-height: 1;
+        }
+
+        .modal-close:hover {
+          color: var(--text-primary);
+        }
+
+        .modal-body {
+          padding: var(--spacing-md);
+        }
+
+        .modal-description {
+          margin: 0 0 var(--spacing-md);
+          font-size: 0.9rem;
+          color: var(--text-secondary);
+        }
+
+        .modal-footer {
+          display: flex;
+          justify-content: flex-end;
+          gap: var(--spacing-sm);
+          padding: var(--spacing-md);
+          border-top: 1px solid var(--border-color);
+        }
+
+        .linkedin-method-tabs {
+          display: flex;
+          gap: 4px;
+          margin-bottom: var(--spacing-md);
+        }
+
+        .method-tab {
+          flex: 1;
+          padding: var(--spacing-sm);
+          border: 1px solid var(--border-color);
+          background: var(--bg-secondary);
+          cursor: pointer;
+          font-size: 0.85rem;
+          transition: all 0.15s;
+        }
+
+        .method-tab:first-child {
+          border-radius: var(--border-radius) 0 0 var(--border-radius);
+        }
+
+        .method-tab:last-child {
+          border-radius: 0 var(--border-radius) var(--border-radius) 0;
+        }
+
+        .method-tab.active {
+          background: var(--color-primary);
+          color: white;
+          border-color: var(--color-primary);
+        }
+
+        .method-help {
+          font-size: 0.8rem;
+          color: var(--text-secondary);
+          margin-bottom: var(--spacing-sm);
+        }
+
+        .linkedin-csv-section,
+        .linkedin-scrape-section {
+          margin-bottom: var(--spacing-md);
+        }
+
+        .csv-input {
+          width: 100%;
+          padding: var(--spacing-sm);
+          border: 2px dashed var(--border-color);
+          border-radius: var(--border-radius);
+          cursor: pointer;
+        }
+
+        .file-selected {
+          font-size: 0.8rem;
+          color: #10B981;
+          margin-top: var(--spacing-xs);
+        }
+
+        .cookie-input {
+          width: 100%;
+          padding: var(--spacing-xs) var(--spacing-sm);
+          border: 1px solid var(--border-color);
+          border-radius: var(--border-radius);
+          font-family: monospace;
+          font-size: 0.85rem;
+          margin-top: var(--spacing-xs);
+        }
+
+        .cookie-help {
+          font-size: 0.7rem;
+          color: var(--text-muted);
+          margin-top: var(--spacing-xs);
+        }
+
+        .titles-filter {
+          margin-bottom: var(--spacing-md);
+        }
+
+        .titles-filter label {
+          display: block;
+          font-size: 0.85rem;
+          font-weight: 500;
+        }
+
+        .titles-filter input {
+          width: 100%;
+          padding: var(--spacing-xs) var(--spacing-sm);
+          border: 1px solid var(--border-color);
+          border-radius: var(--border-radius);
+          font-size: 0.85rem;
+          margin-top: var(--spacing-xs);
+        }
+
+        .linkedin-result {
+          padding: var(--spacing-sm);
+          border-radius: var(--border-radius);
+          font-size: 0.85rem;
+          margin-top: var(--spacing-md);
+        }
+
+        .linkedin-result.success {
+          background: rgba(16, 185, 129, 0.1);
+          border: 1px solid #10B981;
+          color: #065F46;
+        }
+
+        .linkedin-result.info {
+          background: rgba(59, 130, 246, 0.1);
+          border: 1px solid #3B82F6;
+          color: #1E40AF;
+        }
+
+        .linkedin-result.error {
+          background: rgba(239, 68, 68, 0.1);
+          border: 1px solid #EF4444;
+          color: #991B1B;
+        }
+
+        .linkedin-result p {
+          margin: 0 0 var(--spacing-xs);
+        }
+
+        .linkedin-result p:last-child {
+          margin-bottom: 0;
+        }
+
+        .cookie-configured {
+          padding: var(--spacing-sm);
+          background: rgba(16, 185, 129, 0.1);
+          border-radius: var(--border-radius);
+          margin-bottom: var(--spacing-sm);
+        }
+
+        .status-badge {
+          display: inline-block;
+          font-size: 0.7rem;
+          padding: 2px 8px;
+          border-radius: 12px;
+          font-weight: 600;
+          margin-bottom: var(--spacing-xs);
+        }
+
+        .status-badge.success {
+          background: #10B981;
+          color: white;
+        }
+
+        .cookie-help code {
+          background: var(--bg-tertiary);
+          padding: 1px 4px;
+          border-radius: 3px;
+          font-size: 0.8em;
+        }
+
+        .cookie-help em {
+          display: block;
+          margin-top: var(--spacing-xs);
+          color: var(--color-primary);
         }
 
         .pagination-controls {

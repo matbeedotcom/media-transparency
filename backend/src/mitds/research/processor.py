@@ -228,6 +228,8 @@ class LeadProcessor:
             entity_name=entity_name,
             entity_data=entity_data,
             config=session.config,
+            session_id=session.id,
+            depth=lead.depth,
         )
 
         # Step 4: Extract new leads from this entity's relationships
@@ -604,6 +606,8 @@ class LeadProcessor:
         entity_name: str,
         entity_data: dict[str, Any],
         config: ResearchSessionConfig,
+        session_id: UUID | None = None,
+        depth: int = 0,
     ) -> int:
         """Actively ingest data to discover and create relationships.
 
@@ -616,6 +620,8 @@ class LeadProcessor:
             entity_name: Entity name for API queries
             entity_data: Entity metadata (may contain jurisdiction, identifiers)
             config: Session configuration
+            session_id: Optional session ID to add discovered entities to
+            depth: Current depth for entity tracking
 
         Returns:
             Number of relationships created
@@ -660,12 +666,20 @@ class LeadProcessor:
                     result = await ingester.ingest_single(cik, "cik")
                     if result and result.relationships_created:
                         relationships_created += result.relationships_created
+                        if session_id and result.entity_id:
+                            await self.session_manager.add_session_entity(
+                                session_id, result.entity_id, depth=depth, relevance_score=0.9
+                            )
                 else:
                     # Query by name
                     logger.info(f"Fetching SEC EDGAR data for {entity_name}")
                     result = await ingester.ingest_single(entity_name, "name")
                     if result and result.relationships_created:
                         relationships_created += result.relationships_created
+                        if session_id and result.entity_id:
+                            await self.session_manager.add_session_entity(
+                                session_id, result.entity_id, depth=depth, relevance_score=0.9
+                            )
 
                 await ingester.close()
             except Exception as e:
@@ -681,16 +695,28 @@ class LeadProcessor:
                     result = await ingester.ingest_single(sedar_profile, "sedar_profile")
                     if result and result.relationships_created:
                         relationships_created += result.relationships_created
+                        if session_id and result.entity_id:
+                            await self.session_manager.add_session_entity(
+                                session_id, result.entity_id, depth=depth, relevance_score=0.9
+                            )
                 elif bn:
                     logger.info(f"Fetching SEDAR data for BN {bn}")
                     result = await ingester.ingest_single(bn, "bn")
                     if result and result.relationships_created:
                         relationships_created += result.relationships_created
+                        if session_id and result.entity_id:
+                            await self.session_manager.add_session_entity(
+                                session_id, result.entity_id, depth=depth, relevance_score=0.9
+                            )
                 else:
                     logger.info(f"Fetching SEDAR data for {entity_name}")
                     result = await ingester.ingest_single(entity_name, "name")
                     if result and result.relationships_created:
                         relationships_created += result.relationships_created
+                        if session_id and result.entity_id:
+                            await self.session_manager.add_session_entity(
+                                session_id, result.entity_id, depth=depth, relevance_score=0.9
+                            )
 
                 await ingester.close()
             except Exception as e:
@@ -703,6 +729,14 @@ class LeadProcessor:
             result = await ingester.ingest_single(entity_name, "name")
             if result and result.relationships_created:
                 relationships_created += result.relationships_created
+                # Add the discovered sponsor entity to the session
+                if session_id and result.entity_id:
+                    await self.session_manager.add_session_entity(
+                        session_id,
+                        result.entity_id,
+                        depth=depth,
+                        relevance_score=0.9,  # High relevance for direct sponsor match
+                    )
             await ingester.close()
         except Exception as e:
             logger.debug(f"Meta Ads ingestion for relationships failed: {e}")

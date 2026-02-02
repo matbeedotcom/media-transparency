@@ -822,3 +822,28 @@ def _parse_relationship_edge(rel_data: Any) -> RelationshipEdge:
         target_id=UUID(target_id) if target_id else UUID(int=0),
         properties=props,
     )
+
+
+class GraphQueries:
+    """Client for executing arbitrary Cypher queries against Neo4j.
+
+    Provides a simple interface for running custom queries, primarily
+    used by the report generator for dynamic queries.
+    """
+
+    async def execute(
+        self, query: str, params: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
+        """Execute a Cypher query and return results as dictionaries.
+
+        Args:
+            query: Cypher query string
+            params: Query parameters
+
+        Returns:
+            List of result records as dictionaries
+        """
+        async with get_neo4j_session() as session:
+            result = await session.run(query, **(params or {}))
+            records = await result.data()
+            return records or []

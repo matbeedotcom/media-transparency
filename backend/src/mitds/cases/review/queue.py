@@ -5,8 +5,9 @@ before being merged into the case network.
 """
 
 import logging
+from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Any
+from typing import Any, AsyncGenerator
 from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,12 +48,21 @@ class EntityMatchQueue:
         self._db_session = db_session
         self._neo4j_session = neo4j_session
 
-    async def _get_db_session(self) -> AsyncSession:
-        """Get the database session."""
+    @asynccontextmanager
+    async def _get_db_session(self) -> AsyncGenerator[AsyncSession, None]:
+        """Get the database session as a context manager.
+        
+        Usage:
+            async with self._get_db_session() as session:
+                await session.execute(...)
+        """
         if self._db_session is not None:
-            return self._db_session
-        async with get_db_session() as session:
-            return session
+            # Use provided session directly (caller manages lifecycle)
+            yield self._db_session
+        else:
+            # Create a new session with proper cleanup
+            async with get_db_session() as session:
+                yield session
 
     async def _get_neo4j_session(self):
         """Get the Neo4j session."""
@@ -100,33 +110,31 @@ class EntityMatchQueue:
             created_at=datetime.utcnow(),
         )
 
-        session = await self._get_db_session()
+        async with self._get_db_session() as session:
+            # Get status value safely (could be enum or string)
+            status_value = match.status.value if hasattr(match.status, 'value') else match.status
 
-        # Get status value safely (could be enum or string)
-        status_value = match.status.value if hasattr(match.status, 'value') else match.status
-
-        await session.execute(
-            """
-            INSERT INTO entity_matches (
-                id, case_id, source_entity_id, target_entity_id,
-                confidence, match_signals, status, created_at
-            ) VALUES (
-                :id, :case_id, :source_entity_id, :target_entity_id,
-                :confidence, :match_signals, :status, :created_at
+            await session.execute(
+                """
+                INSERT INTO entity_matches (
+                    id, case_id, source_entity_id, target_entity_id,
+                    confidence, match_signals, status, created_at
+                ) VALUES (
+                    :id, :case_id, :source_entity_id, :target_entity_id,
+                    :confidence, :match_signals, :status, :created_at
+                )
+                """,
+                {
+                    "id": str(match.id),
+                    "case_id": str(match.case_id),
+                    "source_entity_id": str(match.source_entity_id),
+                    "target_entity_id": str(match.target_entity_id),
+                    "confidence": match.confidence,
+                    "match_signals": match.match_signals.model_dump(),
+                    "status": status_value,
+                    "created_at": match.created_at,
+                },
             )
-            """,
-            {
-                "id": str(match.id),
-                "case_id": str(match.case_id),
-                "source_entity_id": str(match.source_entity_id),
-                "target_entity_id": str(match.target_entity_id),
-                "confidence": match.confidence,
-                "match_signals": match.match_signals.model_dump(),
-                "status": status_value,
-                "created_at": match.created_at,
-            },
-        )
-        await session.commit()
 
         logger.info(
             f"Created entity match {match.id} for case {case_id} "
@@ -150,37 +158,36 @@ class EntityMatchQueue:
         Returns:
             Tuple of (list of EntityMatch, total count)
         """
-        session = await self._get_db_session()
+        async with self._get_db_session() as session:
+            # Get total count
+            count_result = await session.execute(
+                """
+                SELECT COUNT(*) FROM entity_matches
+                WHERE case_id = :case_id AND status = :status
+                """,
+                {"case_id": str(case_id), "status": MatchStatus.PENDING.value},
+            )
+            total = count_result.scalar() or 0
 
-        # Get total count
-        count_result = await session.execute(
-            """
-            SELECT COUNT(*) FROM entity_matches
-            WHERE case_id = :case_id AND status = :status
-            """,
-            {"case_id": str(case_id), "status": MatchStatus.PENDING.value},
-        )
-        total = count_result.scalar() or 0
+            # Get matches
+            result = await session.execute(
+                """
+                SELECT * FROM entity_matches
+                WHERE case_id = :case_id AND status = :status
+                ORDER BY confidence DESC
+                LIMIT :limit OFFSET :offset
+                """,
+                {
+                    "case_id": str(case_id),
+                    "status": MatchStatus.PENDING.value,
+                    "limit": limit,
+                    "offset": offset,
+                },
+            )
+            rows = result.fetchall()
 
-        # Get matches
-        result = await session.execute(
-            """
-            SELECT * FROM entity_matches
-            WHERE case_id = :case_id AND status = :status
-            ORDER BY confidence DESC
-            LIMIT :limit OFFSET :offset
-            """,
-            {
-                "case_id": str(case_id),
-                "status": MatchStatus.PENDING.value,
-                "limit": limit,
-                "offset": offset,
-            },
-        )
-        rows = result.fetchall()
-
-        matches = [self._row_to_match(row) for row in rows]
-        return matches, total
+            matches = [self._row_to_match(row) for row in rows]
+            return matches, total
 
     async def get_match(self, match_id: UUID) -> EntityMatch | None:
         """Get a single match by ID.
@@ -191,15 +198,15 @@ class EntityMatchQueue:
         Returns:
             The EntityMatch or None if not found
         """
-        session = await self._get_db_session()
-        result = await session.execute(
-            "SELECT * FROM entity_matches WHERE id = :id",
-            {"id": str(match_id)},
-        )
-        row = result.fetchone()
-        if row is None:
-            return None
-        return self._row_to_match(row)
+        async with self._get_db_session() as session:
+            result = await session.execute(
+                "SELECT * FROM entity_matches WHERE id = :id",
+                {"id": str(match_id)},
+            )
+            row = result.fetchone()
+            if row is None:
+                return None
+            return self._row_to_match(row)
 
     async def approve(
         self,
@@ -228,25 +235,24 @@ class EntityMatchQueue:
             raise ValueError(f"Match {match_id} is not pending (status: {match.status})")
 
         now = datetime.utcnow()
-        session = await self._get_db_session()
-        await session.execute(
-            """
-            UPDATE entity_matches SET
-                status = :status,
-                reviewed_by = :reviewed_by,
-                reviewed_at = :reviewed_at,
-                review_notes = :review_notes
-            WHERE id = :id
-            """,
-            {
-                "id": str(match_id),
-                "status": MatchStatus.APPROVED.value,
-                "reviewed_by": reviewed_by,
-                "reviewed_at": now,
-                "review_notes": notes,
-            },
-        )
-        await session.commit()
+        async with self._get_db_session() as session:
+            await session.execute(
+                """
+                UPDATE entity_matches SET
+                    status = :status,
+                    reviewed_by = :reviewed_by,
+                    reviewed_at = :reviewed_at,
+                    review_notes = :review_notes
+                WHERE id = :id
+                """,
+                {
+                    "id": str(match_id),
+                    "status": MatchStatus.APPROVED.value,
+                    "reviewed_by": reviewed_by,
+                    "reviewed_at": now,
+                    "review_notes": notes,
+                },
+            )
 
         # Create SAME_AS relationship in Neo4j
         await self._create_same_as_relationship(
@@ -283,25 +289,24 @@ class EntityMatchQueue:
             raise ValueError(f"Match {match_id} is not pending (status: {match.status})")
 
         now = datetime.utcnow()
-        session = await self._get_db_session()
-        await session.execute(
-            """
-            UPDATE entity_matches SET
-                status = :status,
-                reviewed_by = :reviewed_by,
-                reviewed_at = :reviewed_at,
-                review_notes = :review_notes
-            WHERE id = :id
-            """,
-            {
-                "id": str(match_id),
-                "status": MatchStatus.REJECTED.value,
-                "reviewed_by": reviewed_by,
-                "reviewed_at": now,
-                "review_notes": notes,
-            },
-        )
-        await session.commit()
+        async with self._get_db_session() as session:
+            await session.execute(
+                """
+                UPDATE entity_matches SET
+                    status = :status,
+                    reviewed_by = :reviewed_by,
+                    reviewed_at = :reviewed_at,
+                    review_notes = :review_notes
+                WHERE id = :id
+                """,
+                {
+                    "id": str(match_id),
+                    "status": MatchStatus.REJECTED.value,
+                    "reviewed_by": reviewed_by,
+                    "reviewed_at": now,
+                    "review_notes": notes,
+                },
+            )
 
         logger.info(f"Rejected match {match_id} by {reviewed_by}: {notes}")
         return await self.get_match(match_id)
@@ -330,25 +335,24 @@ class EntityMatchQueue:
             raise ValueError(f"Match {match_id} is not pending (status: {match.status})")
 
         now = datetime.utcnow()
-        session = await self._get_db_session()
-        await session.execute(
-            """
-            UPDATE entity_matches SET
-                status = :status,
-                reviewed_by = :reviewed_by,
-                reviewed_at = :reviewed_at,
-                review_notes = :review_notes
-            WHERE id = :id
-            """,
-            {
-                "id": str(match_id),
-                "status": MatchStatus.DEFERRED.value,
-                "reviewed_by": reviewed_by,
-                "reviewed_at": now,
-                "review_notes": notes,
-            },
-        )
-        await session.commit()
+        async with self._get_db_session() as session:
+            await session.execute(
+                """
+                UPDATE entity_matches SET
+                    status = :status,
+                    reviewed_by = :reviewed_by,
+                    reviewed_at = :reviewed_at,
+                    review_notes = :review_notes
+                WHERE id = :id
+                """,
+                {
+                    "id": str(match_id),
+                    "status": MatchStatus.DEFERRED.value,
+                    "reviewed_by": reviewed_by,
+                    "reviewed_at": now,
+                    "review_notes": notes,
+                },
+            )
 
         logger.info(f"Deferred match {match_id} by {reviewed_by}")
         return await self.get_match(match_id)

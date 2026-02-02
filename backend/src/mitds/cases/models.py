@@ -210,6 +210,25 @@ class RankedEntity(BaseModel):
     jurisdiction: str | None = None
 
 
+class AdMetadata(BaseModel):
+    """Metadata for an ad relationship (Meta Ads specific)."""
+    
+    ad_id: str | None = Field(default=None, description="Meta Ad ID")
+    creative_body: str | None = Field(default=None, description="Ad text content")
+    creative_title: str | None = Field(default=None, description="Ad title")
+    ad_snapshot_url: str | None = Field(default=None, description="URL to view the ad")
+    impressions_lower: int | None = None
+    impressions_upper: int | None = None
+    spend_lower: float | None = None
+    spend_upper: float | None = None
+    currency: str | None = "USD"
+    delivery_start: str | None = None
+    delivery_stop: str | None = None
+    publisher_platforms: list[str] = Field(default_factory=list)
+    target_regions: list[str] = Field(default_factory=list)
+    languages: list[str] = Field(default_factory=list)
+
+
 class RankedRelationship(BaseModel):
     """A relationship ranked by significance in a case report."""
 
@@ -221,6 +240,7 @@ class RankedRelationship(BaseModel):
     significance_score: float = Field(..., description="Computed significance score")
     amount: float | None = Field(default=None, description="Funding amount if applicable")
     evidence_ids: list[UUID] = Field(default_factory=list)
+    ad_metadata: AdMetadata | None = Field(default=None, description="Ad details if SPONSORED_BY relationship")
 
 
 class CrossBorderFlag(BaseModel):
@@ -248,8 +268,8 @@ class EvidenceCitation(BaseModel):
 
     evidence_id: UUID
     source_type: str
-    source_url: str | None
-    retrieved_at: datetime
+    source_url: str | None = None
+    retrieved_at: datetime | None = None
 
 
 class ReportSummary(BaseModel):
@@ -261,6 +281,34 @@ class ReportSummary(BaseModel):
     relationship_count: int
     cross_border_count: int
     has_unresolved_matches: bool
+
+
+class AdSummary(BaseModel):
+    """Aggregated summary of Meta Ads data in a case."""
+    
+    total_ads: int = 0
+    total_spend_lower: float | None = None
+    total_spend_upper: float | None = None
+    total_impressions_lower: int | None = None
+    total_impressions_upper: int | None = None
+    currencies: list[str] = Field(default_factory=list)
+    date_range_start: str | None = None
+    date_range_end: str | None = None
+    publisher_platforms: list[str] = Field(default_factory=list, description="All platforms used")
+    target_countries: list[str] = Field(default_factory=list, description="All countries targeted")
+    top_creative_themes: list[str] = Field(default_factory=list, description="Common words/themes in ad content")
+    sponsors: list[str] = Field(default_factory=list, description="All sponsor names")
+
+
+class SimilarityLead(BaseModel):
+    """A lead for further investigation based on similarity patterns."""
+    
+    lead_type: str = Field(..., description="Type: shared_sponsor, similar_content, shared_region, shared_platform")
+    description: str = Field(..., description="Human-readable description of the similarity")
+    target_value: str = Field(..., description="The value to search for (sponsor name, keyword, etc.)")
+    confidence: float = Field(default=0.7, description="Confidence this is worth investigating")
+    source_ads: list[str] = Field(default_factory=list, description="Ad IDs that suggest this lead")
+    suggested_search: str | None = Field(default=None, description="Suggested search query for Meta Ad Library")
 
 
 class CaseReport(BaseModel):
@@ -284,6 +332,10 @@ class CaseReport(BaseModel):
     cross_border_flags: list[CrossBorderFlag] = Field(default_factory=list)
     unknowns: list[Unknown] = Field(default_factory=list)
     evidence_index: list[EvidenceCitation] = Field(default_factory=list)
+    ads_summary: AdSummary | None = Field(default=None, description="Aggregated Meta Ads data")
+    similarity_leads: list[SimilarityLead] = Field(
+        default_factory=list, description="Suggested leads based on ad content similarity"
+    )
 
     model_config = ConfigDict(
         use_enum_values=True,

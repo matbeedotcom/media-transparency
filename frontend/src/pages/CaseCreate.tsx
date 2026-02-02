@@ -265,23 +265,26 @@ export default function CaseCreate() {
         }
 
         .entry-type-btn {
-          padding: var(--spacing-sm) var(--spacing-md);
-          border: 2px solid var(--border-color);
-          border-radius: var(--radius);
-          background: var(--bg-primary);
+          padding: 8px 16px;
+          border: 2px solid #d1d5db;
+          border-radius: 6px;
+          background: #ffffff;
+          color: #374151;
           cursor: pointer;
           font-size: 0.875rem;
+          font-weight: 500;
           transition: all 0.2s;
         }
 
         .entry-type-btn:hover {
-          border-color: var(--primary);
+          border-color: #2563eb;
+          color: #2563eb;
         }
 
         .entry-type-btn.active {
-          border-color: var(--primary);
-          background: var(--primary);
-          color: white;
+          border-color: #2563eb;
+          background: #2563eb;
+          color: #ffffff;
         }
 
         .config-grid {

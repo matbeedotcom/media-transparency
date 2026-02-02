@@ -4,21 +4,27 @@ The CaseManager handles case creation, status updates, pause/resume,
 and integration with the existing research engine.
 """
 
+import asyncio
+import json
 import logging
 from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import select, update
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator
+
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..db import get_db_session
+from ..db import get_db_session, get_session_factory
 from ..research import (
     ResearchSessionConfig,
     ResearchSessionManager,
     get_session_manager,
 )
 from ..research.models import EntryPointType as ResearchEntryPointType
+from ..research.processor import LeadProcessor
 from .models import (
     Case,
     CaseConfig,
@@ -64,11 +70,16 @@ class CaseManager:
             self._research_manager = get_session_manager()
         return self._research_manager
 
-    async def _get_session(self) -> AsyncSession:
-        """Get the database session."""
-        if self._session is not None:
-            return self._session
-        return await get_db_session().__anext__()
+    @asynccontextmanager
+    async def _get_session(self) -> AsyncGenerator[AsyncSession, None]:
+        """Get a fresh database session as a context manager.
+        
+        Usage:
+            async with self._get_session() as session:
+                await session.execute(...)
+        """
+        async with get_db_session() as session:
+            yield session
 
     def _map_entry_point_type(self, case_type: EntryPointType) -> ResearchEntryPointType:
         """Map case entry point type to research entry point type."""
@@ -121,8 +132,8 @@ class CaseManager:
         )
 
         # Store in database
-        session = await self._get_session()
-        await self._insert_case(session, case)
+        async with self._get_session() as session:
+            await self._insert_case(session, case)
 
         logger.info(f"Created case {case.id}")
         return case
@@ -132,7 +143,7 @@ class CaseManager:
         # This would use SQLAlchemy ORM models in production
         # For now, we'll use raw SQL
         await session.execute(
-            """
+            text("""
             INSERT INTO cases (
                 id, name, description, entry_point_type, entry_point_value,
                 status, config, stats, research_session_id, created_at,
@@ -142,7 +153,7 @@ class CaseManager:
                 :status, :config, :stats, :research_session_id, :created_at,
                 :updated_at, :completed_at, :created_by
             )
-            """,
+            """),
             {
                 "id": str(case.id),
                 "name": case.name,
@@ -150,8 +161,8 @@ class CaseManager:
                 "entry_point_type": case.entry_point_type,
                 "entry_point_value": case.entry_point_value,
                 "status": case.status,
-                "config": case.config.model_dump(),
-                "stats": case.stats.model_dump(),
+                "config": json.dumps(case.config.model_dump()),
+                "stats": json.dumps(case.stats.model_dump()),
                 "research_session_id": str(case.research_session_id) if case.research_session_id else None,
                 "created_at": case.created_at,
                 "updated_at": case.updated_at,
@@ -170,23 +181,27 @@ class CaseManager:
         Returns:
             The Case object, or None if not found
         """
-        session = await self._get_session()
-        result = await session.execute(
-            """
-            SELECT * FROM cases WHERE id = :id
-            """,
-            {"id": str(case_id)},
-        )
-        row = result.fetchone()
-        if row is None:
-            return None
+        async with self._get_session() as session:
+            result = await session.execute(
+                text("SELECT * FROM cases WHERE id = :id"),
+                {"id": str(case_id)},
+            )
+            row = result.fetchone()
+            if row is None:
+                return None
 
-        return self._row_to_case(row)
+            return self._row_to_case(row)
 
     def _row_to_case(self, row: Any) -> Case:
         """Convert a database row to a Case object."""
+        # Handle UUID fields - asyncpg returns UUID objects, not strings
+        case_id = UUID(str(row.id)) if not isinstance(row.id, UUID) else row.id
+        research_id = None
+        if row.research_session_id:
+            research_id = UUID(str(row.research_session_id)) if not isinstance(row.research_session_id, UUID) else row.research_session_id
+        
         return Case(
-            id=UUID(row.id) if isinstance(row.id, str) else row.id,
+            id=case_id,
             name=row.name,
             description=row.description,
             entry_point_type=EntryPointType(row.entry_point_type),
@@ -194,7 +209,7 @@ class CaseManager:
             status=CaseStatus(row.status),
             config=CaseConfig(**row.config) if row.config else CaseConfig(),
             stats=CaseStats(**row.stats) if row.stats else CaseStats(),
-            research_session_id=UUID(row.research_session_id) if row.research_session_id else None,
+            research_session_id=research_id,
             created_at=row.created_at,
             updated_at=row.updated_at,
             completed_at=row.completed_at,
@@ -219,47 +234,46 @@ class CaseManager:
         Returns:
             Tuple of (list of CaseSummary, total count)
         """
-        session = await self._get_session()
+        async with self._get_session() as session:
+            # Build query
+            query = "SELECT id, name, status, entry_point_type, created_at FROM cases WHERE 1=1"
+            params: dict[str, Any] = {}
 
-        # Build query
-        query = "SELECT id, name, status, entry_point_type, created_at FROM cases WHERE 1=1"
-        params: dict[str, Any] = {}
+            if status:
+                query += " AND status = :status"
+                params["status"] = status.value
+            if created_by:
+                query += " AND created_by = :created_by"
+                params["created_by"] = created_by
 
-        if status:
-            query += " AND status = :status"
-            params["status"] = status.value
-        if created_by:
-            query += " AND created_by = :created_by"
-            params["created_by"] = created_by
-
-        # Get total count
-        count_result = await session.execute(
-            f"SELECT COUNT(*) FROM ({query}) AS subquery",
-            params,
-        )
-        total = count_result.scalar() or 0
-
-        # Get paginated results
-        query += " ORDER BY created_at DESC LIMIT :limit OFFSET :offset"
-        params["limit"] = limit
-        params["offset"] = offset
-
-        result = await session.execute(query, params)
-        rows = result.fetchall()
-
-        summaries = [
-            CaseSummary(
-                id=UUID(row.id) if isinstance(row.id, str) else row.id,
-                name=row.name,
-                status=CaseStatus(row.status),
-                entry_point_type=EntryPointType(row.entry_point_type),
-                entity_count=0,  # Would need a join to get this
-                created_at=row.created_at,
+            # Get total count
+            count_result = await session.execute(
+                text(f"SELECT COUNT(*) FROM ({query}) AS subquery"),
+                params,
             )
-            for row in rows
-        ]
+            total = count_result.scalar() or 0
 
-        return summaries, total
+            # Get paginated results
+            query += " ORDER BY created_at DESC LIMIT :limit OFFSET :offset"
+            params["limit"] = limit
+            params["offset"] = offset
+
+            result = await session.execute(text(query), params)
+            rows = result.fetchall()
+
+            summaries = [
+                CaseSummary(
+                    id=UUID(row.id) if isinstance(row.id, str) else row.id,
+                    name=row.name,
+                    status=CaseStatus(row.status),
+                    entry_point_type=EntryPointType(row.entry_point_type),
+                    entity_count=0,  # Would need a join to get this
+                    created_at=row.created_at,
+                )
+                for row in rows
+            ]
+
+            return summaries, total
 
     async def start_processing(self, case_id: UUID) -> Case:
         """Start processing a case.
@@ -290,27 +304,54 @@ class CaseManager:
         )
 
         # Update case status
-        session = await self._get_session()
-        await session.execute(
-            """
-            UPDATE cases SET
-                status = :status,
-                research_session_id = :research_session_id,
-                updated_at = :updated_at
-            WHERE id = :id
-            """,
-            {
-                "id": str(case_id),
-                "status": CaseStatus.PROCESSING.value,
-                "research_session_id": str(research_session.id),
-                "updated_at": datetime.utcnow(),
-            },
-        )
-        await session.commit()
+        async with self._get_session() as session:
+            await session.execute(
+                text("""
+                UPDATE cases SET
+                    status = :status,
+                    research_session_id = :research_session_id,
+                    updated_at = :updated_at
+                WHERE id = :id
+                """),
+                {
+                    "id": str(case_id),
+                    "status": CaseStatus.PROCESSING.value,
+                    "research_session_id": str(research_session.id),
+                    "updated_at": datetime.utcnow(),
+                },
+            )
 
         logger.info(f"Started processing case {case_id} with research session {research_session.id}")
 
+        # Start background processing task
+        asyncio.create_task(
+            self._run_case_processing(case_id, research_session.id)
+        )
+
         return await self.get_case(case_id)
+
+    async def _run_case_processing(self, case_id: UUID, session_id: UUID) -> None:
+        """Background task to process a case.
+        
+        Args:
+            case_id: The case being processed
+            session_id: The research session ID
+        """
+        try:
+            logger.info(f"Starting background processing for case {case_id}")
+            processor = LeadProcessor(self.research_manager)
+            
+            # Process the session (this will run until completion or limits reached)
+            stats = await processor.process_session(session_id)
+            
+            logger.info(f"Case {case_id} processing completed: {stats.total_entities} entities, {stats.total_relationships} relationships")
+            
+            # Mark case as completed
+            await self.complete_case(case_id)
+            
+        except Exception as e:
+            logger.error(f"Case {case_id} processing failed: {e}")
+            await self.fail_case(case_id, str(e))
 
     async def pause_case(self, case_id: UUID) -> Case:
         """Pause a case's processing.
@@ -333,18 +374,15 @@ class CaseManager:
             await self.research_manager.pause_session(case.research_session_id)
 
         # Update case status
-        session = await self._get_session()
-        await session.execute(
-            """
-            UPDATE cases SET status = :status, updated_at = :updated_at WHERE id = :id
-            """,
-            {
-                "id": str(case_id),
-                "status": CaseStatus.PAUSED.value,
-                "updated_at": datetime.utcnow(),
-            },
-        )
-        await session.commit()
+        async with self._get_session() as session:
+            await session.execute(
+                text("UPDATE cases SET status = :status, updated_at = :updated_at WHERE id = :id"),
+                {
+                    "id": str(case_id),
+                    "status": CaseStatus.PAUSED.value,
+                    "updated_at": datetime.utcnow(),
+                },
+            )
 
         logger.info(f"Paused case {case_id}")
         return await self.get_case(case_id)
@@ -370,18 +408,15 @@ class CaseManager:
             await self.research_manager.resume_session(case.research_session_id)
 
         # Update case status
-        session = await self._get_session()
-        await session.execute(
-            """
-            UPDATE cases SET status = :status, updated_at = :updated_at WHERE id = :id
-            """,
-            {
-                "id": str(case_id),
-                "status": CaseStatus.PROCESSING.value,
-                "updated_at": datetime.utcnow(),
-            },
-        )
-        await session.commit()
+        async with self._get_session() as session:
+            await session.execute(
+                text("UPDATE cases SET status = :status, updated_at = :updated_at WHERE id = :id"),
+                {
+                    "id": str(case_id),
+                    "status": CaseStatus.PROCESSING.value,
+                    "updated_at": datetime.utcnow(),
+                },
+            )
 
         logger.info(f"Resumed case {case_id}")
         return await self.get_case(case_id)
@@ -400,23 +435,22 @@ class CaseManager:
             raise ValueError(f"Case {case_id} not found")
 
         now = datetime.utcnow()
-        session = await self._get_session()
-        await session.execute(
-            """
-            UPDATE cases SET
-                status = :status,
-                updated_at = :updated_at,
-                completed_at = :completed_at
-            WHERE id = :id
-            """,
-            {
-                "id": str(case_id),
-                "status": CaseStatus.COMPLETED.value,
-                "updated_at": now,
-                "completed_at": now,
-            },
-        )
-        await session.commit()
+        async with self._get_session() as session:
+            await session.execute(
+                text("""
+                UPDATE cases SET
+                    status = :status,
+                    updated_at = :updated_at,
+                    completed_at = :completed_at
+                WHERE id = :id
+                """),
+                {
+                    "id": str(case_id),
+                    "status": CaseStatus.COMPLETED.value,
+                    "updated_at": now,
+                    "completed_at": now,
+                },
+            )
 
         logger.info(f"Completed case {case_id}")
         return await self.get_case(case_id)
@@ -435,18 +469,15 @@ class CaseManager:
         if case is None:
             raise ValueError(f"Case {case_id} not found")
 
-        session = await self._get_session()
-        await session.execute(
-            """
-            UPDATE cases SET status = :status, updated_at = :updated_at WHERE id = :id
-            """,
-            {
-                "id": str(case_id),
-                "status": CaseStatus.FAILED.value,
-                "updated_at": datetime.utcnow(),
-            },
-        )
-        await session.commit()
+        async with self._get_session() as session:
+            await session.execute(
+                text("UPDATE cases SET status = :status, updated_at = :updated_at WHERE id = :id"),
+                {
+                    "id": str(case_id),
+                    "status": CaseStatus.FAILED.value,
+                    "updated_at": datetime.utcnow(),
+                },
+            )
 
         logger.error(f"Case {case_id} failed: {error_message}")
         return await self.get_case(case_id)
@@ -464,12 +495,11 @@ class CaseManager:
         if case is None:
             return False
 
-        session = await self._get_session()
-        await session.execute(
-            "DELETE FROM cases WHERE id = :id",
-            {"id": str(case_id)},
-        )
-        await session.commit()
+        async with self._get_session() as session:
+            await session.execute(
+                text("DELETE FROM cases WHERE id = :id"),
+                {"id": str(case_id)},
+            )
 
         logger.info(f"Deleted case {case_id}")
         return True
@@ -481,18 +511,15 @@ class CaseManager:
             case_id: The case to update
             stats: New statistics
         """
-        session = await self._get_session()
-        await session.execute(
-            """
-            UPDATE cases SET stats = :stats, updated_at = :updated_at WHERE id = :id
-            """,
-            {
-                "id": str(case_id),
-                "stats": stats.model_dump(),
-                "updated_at": datetime.utcnow(),
-            },
-        )
-        await session.commit()
+        async with self._get_session() as session:
+            await session.execute(
+                text("UPDATE cases SET stats = :stats, updated_at = :updated_at WHERE id = :id"),
+                {
+                    "id": str(case_id),
+                    "stats": json.dumps(stats.model_dump()),
+                    "updated_at": datetime.utcnow(),
+                },
+            )
 
     async def get_pending_matches(
         self, case_id: UUID, limit: int = 20
@@ -506,23 +533,23 @@ class CaseManager:
         Returns:
             List of pending EntityMatch objects
         """
-        session = await self._get_session()
-        result = await session.execute(
-            """
-            SELECT * FROM entity_matches
-            WHERE case_id = :case_id AND status = :status
-            ORDER BY confidence DESC
-            LIMIT :limit
-            """,
-            {
-                "case_id": str(case_id),
-                "status": MatchStatus.PENDING.value,
-                "limit": limit,
-            },
-        )
-        rows = result.fetchall()
+        async with self._get_session() as session:
+            result = await session.execute(
+                text("""
+                SELECT * FROM entity_matches
+                WHERE case_id = :case_id AND status = :status
+                ORDER BY confidence DESC
+                LIMIT :limit
+                """),
+                {
+                    "case_id": str(case_id),
+                    "status": MatchStatus.PENDING.value,
+                    "limit": limit,
+                },
+            )
+            rows = result.fetchall()
 
-        return [self._row_to_entity_match(row) for row in rows]
+            return [self._row_to_entity_match(row) for row in rows]
 
     def _row_to_entity_match(self, row: Any) -> EntityMatch:
         """Convert a database row to an EntityMatch object."""

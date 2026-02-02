@@ -143,6 +143,121 @@ async def search_companies(
 
 
 # =========================
+# Autocomplete (Fast Suggestions)
+# =========================
+
+
+class AutocompleteSuggestion(BaseModel):
+    """Single autocomplete suggestion."""
+    
+    name: str
+    entity_type: str  # "organization", "person", "sponsor"
+    source: str  # Where this data came from
+    id: str | None = None  # Entity ID if in Neo4j
+    jurisdiction: str | None = None
+
+
+@router.get("/autocomplete")
+async def autocomplete_entities(
+    q: str,
+    limit: int = 10,
+    types: str | None = None,
+    user: OptionalUser = None,
+) -> dict[str, Any]:
+    """Fast autocomplete for entity names.
+
+    Returns quick suggestions from pre-scraped data as user types.
+    Optimized for low latency - returns minimal data.
+
+    Args:
+        q: Search query (minimum 2 characters)
+        limit: Maximum suggestions (default: 10, max: 25)
+        types: Comma-separated entity types to include (organization, person, sponsor)
+    """
+    from ..db import get_neo4j_session
+
+    if len(q) < 2:
+        return {"suggestions": [], "query": q}
+
+    limit = min(limit, 25)
+    
+    # Parse types filter - use proper Neo4j label case (e.g., Organization, not ORGANIZATION)
+    type_filter = ""
+    if types:
+        # Map incoming types to actual Neo4j labels (case-sensitive)
+        type_mapping = {
+            "organization": "Organization",
+            "person": "Person",
+            "sponsor": "Sponsor",
+            "outlet": "Outlet",
+        }
+        type_list = [t.strip().lower() for t in types.split(",")]
+        neo4j_labels = [type_mapping[t] for t in type_list if t in type_mapping]
+        if neo4j_labels:
+            type_labels = " OR ".join([f"e:{label}" for label in neo4j_labels])
+            type_filter = f"AND ({type_labels})"
+
+    suggestions: list[AutocompleteSuggestion] = []
+
+    # Search Neo4j for entities
+    try:
+        async with get_neo4j_session() as session:
+            # Fast prefix search with STARTS WITH for speed
+            query = f"""
+            MATCH (e)
+            WHERE (e:Organization OR e:Person OR e:Sponsor OR e:Outlet)
+            AND (
+                toLower(e.name) STARTS WITH toLower($prefix)
+                OR toLower(e.name) CONTAINS toLower($search_term)
+                OR any(alias IN coalesce(e.aliases, []) WHERE toLower(alias) STARTS WITH toLower($prefix))
+            )
+            {type_filter}
+            WITH e,
+                 CASE WHEN toLower(e.name) STARTS WITH toLower($prefix) THEN 0 ELSE 1 END as match_rank
+            RETURN DISTINCT
+                e.id as id,
+                e.name as name,
+                e.entity_type as entity_type,
+                e.jurisdiction as jurisdiction,
+                coalesce(e.confidence, 0.5) as confidence,
+                match_rank,
+                'neo4j' as source
+            ORDER BY match_rank, confidence DESC, name
+            LIMIT $limit
+            """
+
+            result = await session.run(
+                query,
+                prefix=q,
+                search_term=q,
+                limit=limit,
+            )
+            records = await result.data()
+
+            for record in records:
+                suggestions.append(AutocompleteSuggestion(
+                    name=record.get("name", "Unknown"),
+                    entity_type=record.get("entity_type", "organization").lower(),
+                    source=record.get("source", "neo4j"),
+                    id=record.get("id"),
+                    jurisdiction=record.get("jurisdiction"),
+                ))
+    except Exception as e:
+        # Log but don't fail - autocomplete should be resilient
+        import logging
+        logging.getLogger(__name__).warning(f"Neo4j autocomplete failed: {e}")
+
+    # Future: Could also search provincial registry cache if needed
+    # For now, Neo4j contains all scraped data
+
+    return {
+        "suggestions": [s.model_dump() for s in suggestions[:limit]],
+        "query": q,
+        "total": len(suggestions),
+    }
+
+
+# =========================
 # Get Status
 # =========================
 
@@ -1097,6 +1212,25 @@ async def _run_linkedin_ingestion_task(
             await db.commit()
 
 
+@router.get("/linkedin/status")
+async def get_linkedin_status(
+    user: OptionalUser = None,
+) -> dict[str, Any]:
+    """Check LinkedIn ingestion configuration status.
+    
+    Returns whether a session cookie is configured (either via env or will need manual input).
+    """
+    import os
+    
+    has_cookie = bool(os.environ.get("LINKEDIN_SESSION_COOKIE"))
+    
+    return {
+        "configured": has_cookie,
+        "message": "LinkedIn session cookie is configured" if has_cookie else "No session cookie configured - you'll need to provide one",
+        "methods_available": ["csv_import", "browser_scrape"] if has_cookie else ["csv_import"],
+    }
+
+
 @router.post("/linkedin")
 async def trigger_linkedin_ingestion(
     background_tasks: BackgroundTasks,
@@ -1127,6 +1261,7 @@ async def trigger_linkedin_ingestion(
         Job ID and status URL for tracking
     """
     import base64
+    import os
     import tempfile
 
     # Validate request
@@ -1135,15 +1270,23 @@ async def trigger_linkedin_ingestion(
             "Must provide either csv_data for import or enable scrape mode"
         )
 
-    if request.scrape and not request.session_cookie:
+    # Use environment variable as fallback for session cookie
+    session_cookie = request.session_cookie or os.environ.get("LINKEDIN_SESSION_COOKIE")
+    
+    if request.scrape and not session_cookie:
         raise ValidationError(
-            "Browser scraping requires session_cookie for LinkedIn authentication"
+            "Browser scraping requires session_cookie for LinkedIn authentication. "
+            "Either provide it in the request or set LINKEDIN_SESSION_COOKIE in .env"
         )
 
     if request.scrape and not request.company_name and not request.company_url:
         raise ValidationError(
             "Scraping requires company_name or company_url"
         )
+    
+    # Update request with resolved cookie
+    if request.scrape:
+        request.session_cookie = session_cookie
 
     # Handle CSV data
     csv_path = None
@@ -1482,3 +1625,197 @@ async def trigger_batch_provincial_ingestion(
         "message": f"Batch ingestion started for {len(runs)} provinces",
         "runs": runs,
     }
+
+
+# =========================
+# Quick Corporation Lookup & Ingest
+# =========================
+
+
+class QuickIngestRequest(BaseModel):
+    """Request for quick corporation ingestion."""
+
+    name: str
+    jurisdiction: str | None = None  # CA, US, or province code like ON, BC
+    identifiers: dict[str, str] | None = None  # bn, ein, corp_number, etc.
+    discover_executives: bool = False  # Also search LinkedIn for executives/board
+
+
+class QuickIngestResponse(BaseModel):
+    """Response for quick corporation ingestion."""
+
+    found: bool
+    entity_id: str | None = None
+    entity_name: str | None = None
+    source: str | None = None
+    sources_searched: list[str] = []
+    external_matches: list[dict[str, Any]] = []
+    message: str
+    # LinkedIn executive discovery
+    linkedin_available: bool = False
+    linkedin_company_url: str | None = None
+    executives_hint: str | None = None
+
+
+@router.post("/quick-ingest")
+async def quick_ingest_corporation(
+    request: QuickIngestRequest,
+    background_tasks: BackgroundTasks,
+    user: OptionalUser = None,
+) -> QuickIngestResponse:
+    """Quickly lookup and ingest a single corporation.
+
+    This endpoint:
+    1. Searches the local graph for existing entity
+    2. If not found, searches external sources (ISED, OpenCorporates, provincial registries)
+    3. If found externally, creates the entity in the graph
+    4. Returns the entity details or external matches for user selection
+
+    Args:
+        request: Corporation name and optional jurisdiction/identifiers
+
+    Returns:
+        QuickIngestResponse with entity details or external matches
+    """
+    from ..db import get_neo4j_driver
+    from ..ingestion.search import search_all_sources
+
+    sources_searched = []
+    external_matches = []
+
+    # 1. Check if entity already exists in graph
+    driver = await get_neo4j_driver()
+    async with driver.session() as session:
+        # Search by name (fuzzy)
+        result = await session.run(
+            """
+            MATCH (o:Organization)
+            WHERE toLower(o.name) CONTAINS toLower($name)
+               OR any(alias IN coalesce(o.aliases, []) WHERE toLower(alias) CONTAINS toLower($name))
+            RETURN o.id as id, o.name as name, o.jurisdiction as jurisdiction,
+                   o.bn as bn, o.ein as ein, labels(o) as labels
+            ORDER BY 
+                CASE WHEN toLower(o.name) = toLower($name) THEN 0 ELSE 1 END,
+                size(o.name)
+            LIMIT 5
+            """,
+            {"name": request.name}
+        )
+        records = [r async for r in result]
+
+        if records:
+            # Found existing entity
+            best_match = records[0]
+            return QuickIngestResponse(
+                found=True,
+                entity_id=best_match["id"],
+                entity_name=best_match["name"],
+                source="graph",
+                sources_searched=["graph"],
+                external_matches=[],
+                message=f"Found existing entity: {best_match['name']}",
+            )
+
+    sources_searched.append("graph")
+
+    # 2. Search external sources
+    # Determine which sources to search based on jurisdiction
+    source_list = None
+    if request.jurisdiction:
+        jurisdiction = request.jurisdiction.upper()
+        if jurisdiction == "US":
+            source_list = ["sec_edgar", "irs990", "opencorporates"]
+        elif jurisdiction == "CA":
+            source_list = ["canada_corps", "cra", "opencorporates"]
+        elif len(jurisdiction) == 2:
+            # Province code - use provincial search
+            source_list = ["canada_corps", "opencorporates"]
+
+    try:
+        search_result = await search_all_sources(
+            query=request.name,
+            sources=source_list,
+            limit=10,
+        )
+        sources_searched.extend(search_result.sources_searched)
+
+        if search_result.results:
+            for r in search_result.results[:5]:
+                external_matches.append({
+                    "name": r.name,
+                    "source": r.source,
+                    "identifiers": r.identifiers,
+                    "jurisdiction": r.jurisdiction,
+                    "status": r.status,
+                    "address": r.address,
+                })
+    except Exception as e:
+        # Log but continue
+        pass
+
+    # 3. If we have external matches, offer to ingest the best one
+    if external_matches:
+        best = external_matches[0]
+
+        # Create entity in graph from best match
+        async with driver.session() as session:
+            entity_id = str(uuid4())
+            props = {
+                "id": entity_id,
+                "name": best["name"],
+                "entity_type": "Organization",
+                "jurisdiction": best.get("jurisdiction"),
+                "source": best["source"],
+                "ingested_at": datetime.utcnow().isoformat(),
+            }
+
+            # Add identifiers
+            if best.get("identifiers"):
+                for id_type, id_value in best["identifiers"].items():
+                    if id_value:
+                        props[id_type] = id_value
+
+            # Create node
+            await session.run(
+                """
+                CREATE (o:Organization $props)
+                RETURN o.id as id
+                """,
+                {"props": props}
+            )
+
+            # Generate LinkedIn hint for executive discovery
+            linkedin_hint = None
+            linkedin_url = None
+            if request.discover_executives:
+                # Create a LinkedIn company search URL hint
+                company_slug = best["name"].lower().replace(" ", "-").replace(",", "").replace(".", "")[:50]
+                linkedin_url = f"https://www.linkedin.com/company/{company_slug}"
+                linkedin_hint = (
+                    f"To discover executives, use: "
+                    f"POST /api/v1/ingestion/linkedin with company_name='{best['name']}'"
+                )
+
+            return QuickIngestResponse(
+                found=True,
+                entity_id=entity_id,
+                entity_name=best["name"],
+                source=best["source"],
+                sources_searched=sources_searched,
+                external_matches=external_matches,
+                message=f"Ingested from {best['source']}: {best['name']}",
+                linkedin_available=True,
+                linkedin_company_url=linkedin_url,
+                executives_hint=linkedin_hint,
+            )
+
+    # 4. Not found anywhere
+    return QuickIngestResponse(
+        found=False,
+        entity_id=None,
+        entity_name=None,
+        source=None,
+        sources_searched=sources_searched,
+        external_matches=external_matches,
+        message=f"No matches found for '{request.name}'. Try different search terms or check spelling.",
+    )
