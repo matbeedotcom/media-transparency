@@ -9,4 +9,22 @@ Components:
 - ExtractionPipeline: Orchestrates extractors (deterministic first, LLM optional)
 """
 
-__all__: list[str] = []
+from .deterministic import (
+    DeterministicExtractor,
+    ExtractedEntity,
+    get_deterministic_extractor,
+)
+from .llm import LLMExtractor, LLMExtractedEntity, get_llm_extractor
+from .pipeline import ExtractionConfig, ExtractionPipeline, get_extraction_pipeline
+
+__all__ = [
+    "DeterministicExtractor",
+    "ExtractedEntity",
+    "get_deterministic_extractor",
+    "LLMExtractor",
+    "LLMExtractedEntity",
+    "get_llm_extractor",
+    "ExtractionConfig",
+    "ExtractionPipeline",
+    "get_extraction_pipeline",
+]

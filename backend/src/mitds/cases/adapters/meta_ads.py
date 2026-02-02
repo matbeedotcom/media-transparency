@@ -49,6 +49,11 @@ class MetaAdAdapter(BaseEntryPointAdapter):
             )
         return self._ingester
 
+    @ingester.setter
+    def ingester(self, value: MetaAdIngester) -> None:
+        """Set the ingester (useful for testing)."""
+        self._ingester = value
+
     async def validate(self, input_value: str) -> ValidationResult:
         """Validate a Meta Ad sponsor name or page ID.
 

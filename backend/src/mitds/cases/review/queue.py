@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...db import get_async_session
+from ...db import get_db_session
 from ..models import (
     EntityMatch,
     EntityMatchResponse,
@@ -33,19 +33,33 @@ class EntityMatchQueue:
     - Track review history
     """
 
-    def __init__(self, session: AsyncSession | None = None):
+    def __init__(
+        self,
+        db_session: AsyncSession | None = None,
+        neo4j_session: Any = None,
+    ):
         """Initialize the queue.
 
         Args:
-            session: Optional database session
+            db_session: Optional PostgreSQL database session
+            neo4j_session: Optional Neo4j session for graph operations
         """
-        self._session = session
+        self._db_session = db_session
+        self._neo4j_session = neo4j_session
 
-    async def _get_session(self) -> AsyncSession:
+    async def _get_db_session(self) -> AsyncSession:
         """Get the database session."""
-        if self._session is not None:
-            return self._session
-        return await get_async_session()
+        if self._db_session is not None:
+            return self._db_session
+        async with get_db_session() as session:
+            return session
+
+    async def _get_neo4j_session(self):
+        """Get the Neo4j session."""
+        if self._neo4j_session is not None:
+            return self._neo4j_session
+        from ...db import get_neo4j_session
+        return await get_neo4j_session().__anext__()
 
     async def create_match(
         self,
@@ -53,7 +67,7 @@ class EntityMatchQueue:
         source_entity_id: UUID,
         target_entity_id: UUID,
         confidence: float,
-        signals: dict[str, Any],
+        match_signals: MatchSignals | dict[str, Any] | None = None,
     ) -> EntityMatch:
         """Create a new entity match for review.
 
@@ -62,23 +76,35 @@ class EntityMatchQueue:
             source_entity_id: The source entity (e.g., Sponsor)
             target_entity_id: The target entity (e.g., Organization)
             confidence: Match confidence score
-            signals: Signals that contributed to the confidence
+            match_signals: Signals that contributed to the confidence
 
         Returns:
             The created EntityMatch
         """
+        # Normalize match_signals
+        if match_signals is None:
+            signals = MatchSignals()
+        elif isinstance(match_signals, dict):
+            signals = MatchSignals(**match_signals)
+        else:
+            signals = match_signals
+
         match = EntityMatch(
             id=uuid4(),
             case_id=case_id,
             source_entity_id=source_entity_id,
             target_entity_id=target_entity_id,
             confidence=confidence,
-            match_signals=MatchSignals(**signals),
+            match_signals=signals,
             status=MatchStatus.PENDING,
             created_at=datetime.utcnow(),
         )
 
-        session = await self._get_session()
+        session = await self._get_db_session()
+
+        # Get status value safely (could be enum or string)
+        status_value = match.status.value if hasattr(match.status, 'value') else match.status
+
         await session.execute(
             """
             INSERT INTO entity_matches (
@@ -96,7 +122,7 @@ class EntityMatchQueue:
                 "target_entity_id": str(match.target_entity_id),
                 "confidence": match.confidence,
                 "match_signals": match.match_signals.model_dump(),
-                "status": match.status.value,
+                "status": status_value,
                 "created_at": match.created_at,
             },
         )
@@ -124,7 +150,7 @@ class EntityMatchQueue:
         Returns:
             Tuple of (list of EntityMatch, total count)
         """
-        session = await self._get_session()
+        session = await self._get_db_session()
 
         # Get total count
         count_result = await session.execute(
@@ -165,7 +191,7 @@ class EntityMatchQueue:
         Returns:
             The EntityMatch or None if not found
         """
-        session = await self._get_session()
+        session = await self._get_db_session()
         result = await session.execute(
             "SELECT * FROM entity_matches WHERE id = :id",
             {"id": str(match_id)},
@@ -202,7 +228,7 @@ class EntityMatchQueue:
             raise ValueError(f"Match {match_id} is not pending (status: {match.status})")
 
         now = datetime.utcnow()
-        session = await self._get_session()
+        session = await self._get_db_session()
         await session.execute(
             """
             UPDATE entity_matches SET
@@ -257,7 +283,7 @@ class EntityMatchQueue:
             raise ValueError(f"Match {match_id} is not pending (status: {match.status})")
 
         now = datetime.utcnow()
-        session = await self._get_session()
+        session = await self._get_db_session()
         await session.execute(
             """
             UPDATE entity_matches SET
@@ -304,7 +330,7 @@ class EntityMatchQueue:
             raise ValueError(f"Match {match_id} is not pending (status: {match.status})")
 
         now = datetime.utcnow()
-        session = await self._get_session()
+        session = await self._get_db_session()
         await session.execute(
             """
             UPDATE entity_matches SET
@@ -335,9 +361,6 @@ class EntityMatchQueue:
         approved_by: str,
     ) -> None:
         """Create a SAME_AS relationship in Neo4j."""
-        from ...graph.queries import GraphQueries
-
-        graph = GraphQueries()
         query = """
         MATCH (s {id: $source_id})
         MATCH (t {id: $target_id})
@@ -350,7 +373,8 @@ class EntityMatchQueue:
         """
 
         try:
-            await graph.execute(
+            neo4j_session = await self._get_neo4j_session()
+            await neo4j_session.run(
                 query,
                 {
                     "source_id": str(source_id),
@@ -418,9 +442,6 @@ class EntityMatchQueue:
 
     async def _get_entity_summary(self, entity_id: UUID) -> EntitySummary | None:
         """Get entity summary from Neo4j."""
-        from ...graph.queries import GraphQueries
-
-        graph = GraphQueries()
         query = """
         MATCH (e {id: $id})
         RETURN e.id as id, e.name as name, e.entity_type as entity_type,
@@ -429,9 +450,12 @@ class EntityMatchQueue:
         """
 
         try:
-            results = await graph.execute(query, {"id": str(entity_id)})
-            if results:
-                row = results[0]
+            neo4j_session = await self._get_neo4j_session()
+            result = await neo4j_session.run(query, {"id": str(entity_id)})
+            record = await result.single()
+
+            if record:
+                row = dict(record)
                 identifiers = {}
                 if row.get("ein"):
                     identifiers["ein"] = row["ein"]

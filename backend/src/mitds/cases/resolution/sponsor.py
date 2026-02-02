@@ -11,7 +11,7 @@ from uuid import UUID
 
 from rapidfuzz import fuzz
 
-from ...graph.queries import GraphQueries
+from ...db import get_neo4j_session
 
 logger = logging.getLogger(__name__)
 
@@ -22,11 +22,18 @@ class MatchCandidate:
 
     entity_id: UUID
     name: str
-    entity_type: str
-    jurisdiction: str | None
-    identifiers: dict[str, str]
-    confidence: float
-    signals: dict[str, Any]
+    entity_type: str = "organization"
+    jurisdiction: str | None = None
+    identifiers: dict[str, str] | None = None
+    confidence: float = 0.0
+    match_type: str = "name"
+    signals: dict[str, Any] | None = None
+
+    def __post_init__(self):
+        if self.identifiers is None:
+            self.identifiers = {}
+        if self.signals is None:
+            self.signals = {}
 
 
 class SponsorResolver:
@@ -57,25 +64,26 @@ class SponsorResolver:
 
     def __init__(
         self,
+        neo4j_session: Any = None,
         auto_merge_threshold: float = 0.9,
         review_threshold: float = 0.7,
     ):
         """Initialize the resolver.
 
         Args:
+            neo4j_session: Optional Neo4j session (for testing)
             auto_merge_threshold: Auto-merge matches above this confidence
             review_threshold: Queue for review above this confidence
         """
         self.auto_merge_threshold = auto_merge_threshold
         self.review_threshold = review_threshold
-        self._graph: GraphQueries | None = None
+        self._neo4j_session = neo4j_session
 
-    @property
-    def graph(self) -> GraphQueries:
-        """Get the graph queries client."""
-        if self._graph is None:
-            self._graph = GraphQueries()
-        return self._graph
+    async def _get_neo4j_session(self):
+        """Get or create Neo4j session."""
+        if self._neo4j_session is not None:
+            return self._neo4j_session
+        return await get_neo4j_session().__anext__()
 
     async def resolve(
         self,
@@ -138,6 +146,12 @@ class SponsorResolver:
         self, id_type: str, id_value: str
     ) -> MatchCandidate | None:
         """Find an exact match by identifier."""
+        # Sanitize id_type to prevent injection
+        allowed_types = {"meta_page_id", "ein", "bn", "cik", "sedar_profile"}
+        if id_type not in allowed_types:
+            logger.warning(f"Invalid identifier type: {id_type}")
+            return None
+
         query = f"""
         MATCH (o:Organization)
         WHERE o.{id_type} = $value
@@ -148,9 +162,12 @@ class SponsorResolver:
         """
 
         try:
-            results = await self.graph.execute(query, {"value": id_value})
-            if results:
-                row = results[0]
+            session = await self._get_neo4j_session()
+            result = await session.run(query, {"value": id_value})
+            record = await result.single()
+
+            if record:
+                row = dict(record)
                 identifiers = {}
                 if row.get("ein"):
                     identifiers["ein"] = row["ein"]
@@ -160,12 +177,13 @@ class SponsorResolver:
                     identifiers["meta_page_id"] = row["meta_page_id"]
 
                 return MatchCandidate(
-                    entity_id=UUID(row["id"]),
+                    entity_id=UUID(row["id"]) if isinstance(row["id"], str) else row["id"],
                     name=row["name"],
                     entity_type=row.get("entity_type", "organization"),
                     jurisdiction=row.get("jurisdiction"),
                     identifiers=identifiers,
                     confidence=1.0,  # Exact identifier match
+                    match_type="identifier",
                     signals={
                         "identifier_match": {
                             "type": id_type,
@@ -181,9 +199,10 @@ class SponsorResolver:
     async def _match_by_name(
         self,
         name: str,
-        jurisdiction: str | None,
-        address_city: str | None,
-        address_postal: str | None,
+        jurisdiction: str | None = None,
+        address_city: str | None = None,
+        address_postal: str | None = None,
+        limit: int = 10,
     ) -> list[MatchCandidate]:
         """Find fuzzy name matches."""
         candidates: list[MatchCandidate] = []
@@ -204,9 +223,11 @@ class SponsorResolver:
         """
 
         try:
-            results = await self.graph.execute(query, {})
+            session = await self._get_neo4j_session()
+            result = await session.run(query, {})
+            records = await result.data()
 
-            for row in results:
+            for row in records:
                 org_name = row.get("name", "")
                 if not org_name:
                     continue
@@ -261,13 +282,18 @@ class SponsorResolver:
                 if row.get("meta_page_id"):
                     identifiers["meta_page_id"] = row["meta_page_id"]
 
+                entity_id = row["id"]
+                if isinstance(entity_id, str):
+                    entity_id = UUID(entity_id)
+
                 candidates.append(MatchCandidate(
-                    entity_id=UUID(row["id"]),
+                    entity_id=entity_id,
                     name=org_name,
                     entity_type=row.get("entity_type", "organization"),
                     jurisdiction=org_jurisdiction,
                     identifiers=identifiers,
                     confidence=min(confidence, 1.0),
+                    match_type="name",
                     signals=signals,
                 ))
 
@@ -276,7 +302,7 @@ class SponsorResolver:
 
         # Sort by confidence
         candidates.sort(key=lambda x: x.confidence, reverse=True)
-        return candidates[:10]  # Return top 10 candidates
+        return candidates[:limit]
 
     def _normalize_name(self, name: str) -> str:
         """Normalize an organization name for comparison."""

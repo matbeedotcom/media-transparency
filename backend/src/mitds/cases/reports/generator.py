@@ -12,7 +12,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...db import get_async_session
+from ...db import get_db_session
 from ...graph.queries import GraphQueries
 from ..models import (
     Case,
@@ -64,7 +64,7 @@ class ReportGenerator:
         """Get the database session."""
         if self._session is not None:
             return self._session
-        return await get_async_session()
+        return await get_db_session().__anext__()
 
     @property
     def graph(self) -> GraphQueries:

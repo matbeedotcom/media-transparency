@@ -874,4 +874,224 @@ export const getDataSources = async (): Promise<DataSourcesResponse> => {
   return response.data;
 };
 
+// =========================
+// Cases (Autonomous Case Intake)
+// =========================
+
+export interface CaseConfig {
+  max_depth: number;
+  max_entities: number;
+  max_relationships: number;
+  jurisdictions: string[];
+  min_confidence: number;
+  auto_merge_threshold: number;
+  review_threshold: number;
+  enable_llm_extraction: boolean;
+}
+
+export interface CaseStats {
+  entity_count: number;
+  relationship_count: number;
+  evidence_count: number;
+  pending_matches: number;
+  leads_processed: number;
+  leads_pending: number;
+}
+
+export interface CaseSummary {
+  id: string;
+  name: string;
+  status: 'initializing' | 'processing' | 'paused' | 'completed' | 'failed';
+  entry_point_type: 'meta_ad' | 'corporation' | 'url' | 'text';
+  entity_count: number;
+  created_at: string;
+}
+
+export interface CaseResponse {
+  id: string;
+  name: string;
+  description: string | null;
+  entry_point_type: 'meta_ad' | 'corporation' | 'url' | 'text';
+  entry_point_value: string;
+  status: 'initializing' | 'processing' | 'paused' | 'completed' | 'failed';
+  config: CaseConfig;
+  stats: CaseStats;
+  research_session_id: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
+export interface CreateCaseRequest {
+  name: string;
+  description?: string;
+  entry_point_type: 'meta_ad' | 'corporation' | 'url' | 'text';
+  entry_point_value: string;
+  config?: Partial<CaseConfig>;
+}
+
+export interface CaseListResponse {
+  items: CaseSummary[];
+  total: number;
+}
+
+export interface RankedEntity {
+  entity_id: string;
+  name: string;
+  entity_type: string;
+  relevance_score: number;
+  depth: number;
+  key_relationships: string[];
+  jurisdiction: string | null;
+}
+
+export interface RankedRelationship {
+  source_entity_id: string;
+  source_name: string;
+  target_entity_id: string;
+  target_name: string;
+  relationship_type: string;
+  significance_score: number;
+  amount: number | null;
+  evidence_ids: string[];
+}
+
+export interface CrossBorderFlag {
+  us_entity_id: string;
+  us_entity_name: string;
+  ca_entity_id: string;
+  ca_entity_name: string;
+  relationship_type: string;
+  amount: number | null;
+  evidence_ids: string[];
+}
+
+export interface CaseReportSummary {
+  entry_point: string;
+  processing_time_seconds: number;
+  entity_count: number;
+  relationship_count: number;
+  cross_border_count: number;
+  has_unresolved_matches: boolean;
+}
+
+export interface CaseReport {
+  id: string;
+  case_id: string;
+  generated_at: string;
+  report_version: number;
+  summary: CaseReportSummary;
+  top_entities: RankedEntity[];
+  top_relationships: RankedRelationship[];
+  cross_border_flags: CrossBorderFlag[];
+  unknowns: Array<{ entity_name: string; reason: string; attempted_sources: string[] }>;
+  evidence_index: Array<{ evidence_id: string; source_type: string; source_url: string | null; retrieved_at: string }>;
+}
+
+export interface MatchSignals {
+  name_similarity: number | null;
+  identifier_match: { type: string; matched: boolean } | null;
+  jurisdiction_match: boolean;
+  address_overlap: { city: boolean; postal_fsa: boolean } | null;
+  shared_directors: string[] | null;
+}
+
+export interface CaseEntitySummary {
+  id: string;
+  name: string;
+  entity_type: string;
+  jurisdiction: string | null;
+  identifiers: Record<string, string>;
+}
+
+export interface EntityMatchResponse {
+  id: string;
+  source_entity: CaseEntitySummary;
+  target_entity: CaseEntitySummary;
+  confidence: number;
+  match_signals: MatchSignals;
+  status: 'pending' | 'approved' | 'rejected' | 'deferred';
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  review_notes: string | null;
+}
+
+export interface MatchListResponse {
+  items: EntityMatchResponse[];
+  pending_count: number;
+}
+
+// Cases API
+export const listCases = async (params?: {
+  status?: string;
+  created_by?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<CaseListResponse> => {
+  const response = await apiClient.get('/cases', { params });
+  return response.data;
+};
+
+export const createCase = async (data: CreateCaseRequest): Promise<CaseResponse> => {
+  const response = await apiClient.post('/cases', data);
+  return response.data;
+};
+
+export const getCase = async (id: string): Promise<CaseResponse> => {
+  const response = await apiClient.get(`/cases/${id}`);
+  return response.data;
+};
+
+export const deleteCase = async (id: string): Promise<void> => {
+  await apiClient.delete(`/cases/${id}`);
+};
+
+export const startCase = async (id: string): Promise<CaseResponse> => {
+  const response = await apiClient.post(`/cases/${id}/start`);
+  return response.data;
+};
+
+export const pauseCase = async (id: string): Promise<CaseResponse> => {
+  const response = await apiClient.post(`/cases/${id}/pause`);
+  return response.data;
+};
+
+export const resumeCase = async (id: string): Promise<CaseResponse> => {
+  const response = await apiClient.post(`/cases/${id}/resume`);
+  return response.data;
+};
+
+export const getCaseReport = async (id: string, format: 'json' | 'markdown' = 'json'): Promise<CaseReport | string> => {
+  const response = await apiClient.get(`/cases/${id}/report`, { params: { format } });
+  return response.data;
+};
+
+export const generateCaseReport = async (id: string): Promise<CaseReport> => {
+  const response = await apiClient.post(`/cases/${id}/report`);
+  return response.data;
+};
+
+export const listCaseMatches = async (
+  caseId: string,
+  params?: { status?: string; limit?: number; offset?: number }
+): Promise<MatchListResponse> => {
+  const response = await apiClient.get(`/cases/${caseId}/matches`, { params });
+  return response.data;
+};
+
+export const approveMatch = async (matchId: string, notes?: string): Promise<EntityMatchResponse> => {
+  const response = await apiClient.post(`/cases/matches/${matchId}/approve`, { notes });
+  return response.data;
+};
+
+export const rejectMatch = async (matchId: string, notes?: string): Promise<EntityMatchResponse> => {
+  const response = await apiClient.post(`/cases/matches/${matchId}/reject`, { notes });
+  return response.data;
+};
+
+export const deferMatch = async (matchId: string, notes?: string): Promise<EntityMatchResponse> => {
+  const response = await apiClient.post(`/cases/matches/${matchId}/defer`, { notes });
+  return response.data;
+};
+
 export default apiClient;

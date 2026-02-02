@@ -10,9 +10,43 @@ Available adapters:
 - TextAdapter: Extract entities from pasted text
 """
 
-from .base import BaseEntryPointAdapter, ValidationResult
+from .base import BaseEntryPointAdapter, SeedEntity, ValidationResult
+from .meta_ads import MetaAdAdapter
+from .corporation import CorporationAdapter
+from .url import URLAdapter
+from .text import TextAdapter
 
 __all__ = [
     "BaseEntryPointAdapter",
+    "SeedEntity",
     "ValidationResult",
+    "MetaAdAdapter",
+    "CorporationAdapter",
+    "URLAdapter",
+    "TextAdapter",
 ]
+
+
+def get_adapter(entry_point_type: str) -> BaseEntryPointAdapter:
+    """Get the appropriate adapter for an entry point type.
+
+    Args:
+        entry_point_type: The entry point type (meta_ad, corporation, url, text)
+
+    Returns:
+        The appropriate adapter instance
+
+    Raises:
+        ValueError: If the entry point type is not supported
+    """
+    adapters = {
+        "meta_ad": MetaAdAdapter,
+        "corporation": CorporationAdapter,
+        "url": URLAdapter,
+        "text": TextAdapter,
+    }
+
+    if entry_point_type not in adapters:
+        raise ValueError(f"Unsupported entry point type: {entry_point_type}")
+
+    return adapters[entry_point_type]()

@@ -8,6 +8,9 @@ import ValidationDashboard from './pages/ValidationDashboard';
 import EntityResolution from './pages/EntityResolution';
 import IngestionPage from './pages/IngestionPage';
 import SettingsPage from './pages/SettingsPage';
+import CaseCreate from './pages/CaseCreate';
+import CaseDetail from './pages/CaseDetail';
+import ReviewQueue from './pages/ReviewQueue';
 
 function App() {
   return (
@@ -22,6 +25,11 @@ function App() {
         <Route path="validation" element={<ValidationDashboard />} />
         <Route path="resolution" element={<EntityResolution />} />
         <Route path="settings" element={<SettingsPage />} />
+        {/* Cases - Autonomous Research */}
+        <Route path="cases" element={<CaseCreate />} />
+        <Route path="cases/new" element={<CaseCreate />} />
+        <Route path="cases/:id" element={<CaseDetail />} />
+        <Route path="cases/:id/review" element={<ReviewQueue />} />
       </Route>
     </Routes>
   );

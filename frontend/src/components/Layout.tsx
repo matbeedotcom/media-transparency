@@ -15,6 +15,7 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { path: '/', label: 'Dashboard', icon: '📊' },
+  { path: '/cases', label: 'Cases', icon: '🔬' },
   { path: '/ingestion', label: 'Ingestion', icon: '📥' },
   { path: '/entities', label: 'Entity Explorer', icon: '🔍' },
   { path: '/detection', label: 'Detection', icon: '🎯' },

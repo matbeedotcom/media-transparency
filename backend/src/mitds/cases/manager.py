@@ -12,7 +12,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..db import get_async_session
+from ..db import get_db_session
 from ..research import (
     ResearchSessionConfig,
     ResearchSessionManager,
@@ -68,7 +68,7 @@ class CaseManager:
         """Get the database session."""
         if self._session is not None:
             return self._session
-        return await get_async_session()
+        return await get_db_session().__anext__()
 
     def _map_entry_point_type(self, case_type: EntryPointType) -> ResearchEntryPointType:
         """Map case entry point type to research entry point type."""
