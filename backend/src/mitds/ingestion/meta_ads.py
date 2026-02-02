@@ -403,13 +403,14 @@ class MetaAdIngester(BaseIngester[MetaAdRecord]):
         - Long-lived User Token: 60 days (exchanged from short-lived)
         - System User Token: Can be long-lived or never expire
 
-        For the Ad Library API (public political ads data), an App Access Token
-        is sufficient and can be auto-fetched using META_APP_ID + META_APP_SECRET.
+        For the Ad Library API (public political ads data), a User Access Token
+        is required. App Access Tokens do not work for this API.
         
         Token priority:
         1. Cached valid token
-        2. META_ACCESS_TOKEN environment variable (for User/System tokens)
-        3. Fetch App Access Token via OAuth from META_APP_ID + META_APP_SECRET
+        2. OAuth token from database (from "Connect Facebook" flow)
+        3. META_ACCESS_TOKEN environment variable (for manual tokens)
+        4. Fetch App Access Token via OAuth (limited functionality)
         """
         settings = get_settings()
 
@@ -418,28 +419,54 @@ class MetaAdIngester(BaseIngester[MetaAdRecord]):
             if datetime.utcnow() < self._token_expires_at - timedelta(minutes=5):
                 return self._access_token
 
-        # Priority 1: Use explicit META_ACCESS_TOKEN if set
+        # Priority 1: Check database for OAuth token (from "Connect Facebook" flow)
+        try:
+            from ..services.meta_token import get_active_meta_token
+            db_token = await get_active_meta_token()
+            if db_token:
+                self._access_token = db_token.access_token
+                self._token_expires_at = db_token.expires_at or (datetime.utcnow() + timedelta(days=60))
+                self.logger.info(
+                    f"Using OAuth token for user {db_token.fb_user_name or 'unknown'}, "
+                    f"expires in {db_token.days_until_expiry or '?'} days"
+                )
+                if db_token.expires_soon:
+                    self.logger.warning(
+                        f"Meta OAuth token expires soon ({db_token.days_until_expiry} days). "
+                        "Please reconnect your Facebook account in Settings."
+                    )
+                return self._access_token
+        except Exception as e:
+            self.logger.debug(f"Could not fetch OAuth token from database: {e}")
+
+        # Priority 2: Use explicit META_ACCESS_TOKEN if set
         # (This is for User tokens or System User tokens with extra permissions)
         if settings.meta_access_token:
             self._access_token = settings.meta_access_token
             # Assume token is valid for 60 days if not refreshed
             self._token_expires_at = datetime.utcnow() + timedelta(days=60)
-            self.logger.debug("Using configured META_ACCESS_TOKEN")
+            self.logger.debug("Using configured META_ACCESS_TOKEN from environment")
             return self._access_token
 
-        # Priority 2: Fetch App Access Token via OAuth from app credentials
+        # Priority 3: Fetch App Access Token via OAuth from app credentials
+        # Note: App tokens have limited functionality with Meta APIs
         if settings.meta_app_id and settings.meta_app_secret:
             try:
                 token = await self._fetch_app_access_token()
+                self.logger.warning(
+                    "Using App Access Token - this has limited functionality. "
+                    "For full Ad Library API access, connect your Facebook account in Settings."
+                )
                 return token
             except Exception as e:
                 self.logger.error(f"Failed to fetch App Access Token: {e}")
                 raise
 
         raise ValueError(
-            "No Meta access token configured. Set either:\n"
-            "  - META_APP_ID and META_APP_SECRET (recommended for Ad Library API)\n"
-            "  - META_ACCESS_TOKEN (for User/System User tokens with extra permissions)"
+            "No Meta access token configured. Options:\n"
+            "  1. Connect your Facebook account in Settings (recommended)\n"
+            "  2. Set META_ACCESS_TOKEN in .env (manual token management)\n"
+            "  3. Set META_APP_ID and META_APP_SECRET (limited functionality)"
         )
 
     async def _fetch_app_access_token(self) -> str:

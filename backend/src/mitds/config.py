@@ -127,6 +127,21 @@ class Settings(BaseSettings):
     meta_app_secret: str = Field(default="", repr=False)
     meta_access_token: str = Field(default="", repr=False)
 
+    # Meta OAuth Configuration
+    # NOTE: Meta requires HTTPS for callback URLs in production.
+    # localhost is allowed without HTTPS during development.
+    # Set these via environment variables for production:
+    #   META_OAUTH_REDIRECT_URI=https://your-domain.com/api/v1/meta/auth/callback
+    #   META_OAUTH_FRONTEND_REDIRECT=https://your-domain.com/settings
+    meta_oauth_redirect_uri: str = Field(
+        default="http://localhost:8000/api/v1/meta/auth/callback",
+        description="OAuth callback URL for Meta/Facebook authentication (must be HTTPS in production)",
+    )
+    meta_oauth_frontend_redirect: str = Field(
+        default="http://localhost:5173/settings",
+        description="Frontend URL to redirect to after Meta OAuth",
+    )
+
     # =========================
     # Provincial Registry Credentials
     # =========================

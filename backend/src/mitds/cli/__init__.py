@@ -4,6 +4,7 @@ Provides command-line tools for:
 - Data ingestion
 - Entity resolution
 - Analysis
+- Development utilities
 """
 
 import click
@@ -14,6 +15,7 @@ from .resolve import cli as resolve_cli
 from .detect import cli as detect_cli
 from .research import cli as research_cli
 from .cases import case_group
+from .dev import cli as dev_cli
 
 
 @click.group()
@@ -33,6 +35,7 @@ main.add_command(resolve_cli, name="resolve")
 main.add_command(detect_cli, name="detect")
 main.add_command(research_cli, name="research")
 main.add_command(case_group, name="case")
+main.add_command(dev_cli, name="dev")
 
 
 if __name__ == "__main__":

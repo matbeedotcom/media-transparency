@@ -175,6 +175,7 @@ from mitds.api.resolution import router as resolution_router
 from mitds.api.settings import router as settings_router
 from mitds.api.research import router as research_router
 from mitds.api.cases import router as cases_router
+from mitds.api.meta_oauth import router as meta_oauth_router
 
 app.include_router(entities_router, prefix="/api/v1", tags=["Entities"])
 app.include_router(relationships_router, prefix="/api/v1", tags=["Relationships"])
@@ -187,6 +188,7 @@ app.include_router(resolution_router, prefix="/api/v1", tags=["Resolution"])
 app.include_router(settings_router, prefix="/api/v1", tags=["Settings"])
 app.include_router(research_router, prefix="/api/v1", tags=["Research"])
 app.include_router(cases_router, prefix="/api/v1", tags=["Cases"])
+app.include_router(meta_oauth_router, prefix="/api/v1/meta", tags=["Meta OAuth"])
 
 
 # =========================

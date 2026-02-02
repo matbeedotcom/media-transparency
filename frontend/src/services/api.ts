@@ -875,6 +875,57 @@ export const getDataSources = async (): Promise<DataSourcesResponse> => {
 };
 
 // =========================
+// Meta OAuth
+// =========================
+
+export interface MetaAuthUrlResponse {
+  auth_url: string;
+  state: string;
+}
+
+export interface MetaAuthStatusResponse {
+  connected: boolean;
+  fb_user_id: string | null;
+  fb_user_name: string | null;
+  expires_at: string | null;
+  days_until_expiry: number | null;
+  expires_soon: boolean;
+  scopes: string[] | null;
+}
+
+export interface MetaDisconnectResponse {
+  success: boolean;
+  message: string;
+}
+
+export interface MetaRefreshResponse {
+  success: boolean;
+  needs_reauth: boolean;
+  message: string;
+  days_until_expiry?: number;
+}
+
+export const getMetaAuthUrl = async (): Promise<MetaAuthUrlResponse> => {
+  const response = await apiClient.get('/meta/auth/login');
+  return response.data;
+};
+
+export const getMetaAuthStatus = async (): Promise<MetaAuthStatusResponse> => {
+  const response = await apiClient.get('/meta/auth/status');
+  return response.data;
+};
+
+export const disconnectMeta = async (): Promise<MetaDisconnectResponse> => {
+  const response = await apiClient.delete('/meta/auth/disconnect');
+  return response.data;
+};
+
+export const refreshMetaToken = async (): Promise<MetaRefreshResponse> => {
+  const response = await apiClient.post('/meta/auth/refresh');
+  return response.data;
+};
+
+// =========================
 // Cases (Autonomous Case Intake)
 // =========================
 
