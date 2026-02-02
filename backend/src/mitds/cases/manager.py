@@ -38,6 +38,7 @@ from .models import (
     EntityMatch,
     Evidence,
     MatchStatus,
+    ProcessingDetails,
 )
 
 logger = logging.getLogger(__name__)
@@ -190,7 +191,42 @@ class CaseManager:
             if row is None:
                 return None
 
-            return self._row_to_case(row)
+            case = self._row_to_case(row)
+            
+            # If processing, fetch live stats from research session
+            if case.status == CaseStatus.PROCESSING and case.research_session_id:
+                case = await self._enrich_with_live_stats(case)
+            
+            return case
+    
+    async def _enrich_with_live_stats(self, case: Case) -> Case:
+        """Enrich case with live stats from the research session.
+        
+        Args:
+            case: The case to enrich
+            
+        Returns:
+            Case with updated stats from the research session
+        """
+        if not case.research_session_id:
+            return case
+            
+        try:
+            research_session = await self.research_manager.get_session(case.research_session_id)
+            if research_session and research_session.stats:
+                # Map research session stats to case stats
+                case.stats = CaseStats(
+                    entity_count=research_session.stats.total_entities,
+                    relationship_count=research_session.stats.total_relationships,
+                    evidence_count=case.stats.evidence_count,  # Keep existing
+                    pending_matches=case.stats.pending_matches,  # Keep existing
+                    leads_processed=research_session.stats.leads_completed,
+                    leads_pending=research_session.stats.leads_pending,
+                )
+        except Exception as e:
+            logger.warning(f"Failed to fetch live stats for case {case.id}: {e}")
+        
+        return case
 
     def _row_to_case(self, row: Any) -> Case:
         """Convert a database row to a Case object."""
@@ -434,6 +470,14 @@ class CaseManager:
         if case is None:
             raise ValueError(f"Case {case_id} not found")
 
+        # Sync final stats from research session before completing
+        if case.research_session_id:
+            try:
+                case = await self._enrich_with_live_stats(case)
+                await self.update_stats(case_id, case.stats)
+            except Exception as e:
+                logger.warning(f"Failed to sync final stats for case {case_id}: {e}")
+
         now = datetime.utcnow()
         async with self._get_session() as session:
             await session.execute(
@@ -519,6 +563,101 @@ class CaseManager:
                     "stats": json.dumps(stats.model_dump()),
                     "updated_at": datetime.utcnow(),
                 },
+            )
+
+    async def get_processing_details(self, case_id: UUID) -> ProcessingDetails:
+        """Get detailed processing information for an active case.
+        
+        Args:
+            case_id: The case ID
+            
+        Returns:
+            ProcessingDetails with real-time processing information
+        """
+        case = await self.get_case(case_id)
+        if case is None:
+            raise ValueError(f"Case {case_id} not found")
+        
+        if case.status != CaseStatus.PROCESSING or not case.research_session_id:
+            return ProcessingDetails(
+                is_processing=False,
+                current_phase="idle" if case.status != CaseStatus.COMPLETED else "completed",
+            )
+        
+        try:
+            from ..research.queue import get_queue_manager
+            
+            research_session = await self.research_manager.get_session(case.research_session_id)
+            queue_manager = get_queue_manager()
+            
+            if not research_session:
+                return ProcessingDetails(is_processing=True, current_phase="initializing")
+            
+            # Get queue stats
+            queue_stats = await queue_manager.get_queue_stats(case.research_session_id)
+            
+            # Get recent entities (last 5 discovered)
+            recent_entities_data = await self.research_manager.get_session_entities(
+                case.research_session_id, limit=5
+            )
+            recent_entities = [e["name"] for e in recent_entities_data]
+            
+            # Get recent/current leads being processed
+            async with self._get_session() as session:
+                result = await session.execute(
+                    text("""
+                        SELECT target_identifier FROM lead_queue 
+                        WHERE session_id = :session_id 
+                        AND status IN ('pending', 'processing')
+                        ORDER BY priority DESC, created_at ASC
+                        LIMIT 5
+                    """),
+                    {"session_id": str(case.research_session_id)},
+                )
+                rows = result.fetchall()
+                recent_leads = [row.target_identifier for row in rows]
+            
+            # Calculate progress
+            leads_total = queue_stats.total
+            leads_completed = queue_stats.completed
+            progress_percent = 0.0
+            if leads_total > 0:
+                progress_percent = min(100.0, (leads_completed / leads_total) * 100)
+            
+            # Determine current phase
+            if queue_stats.pending > 0:
+                current_phase = "processing_leads"
+            elif leads_completed > 0:
+                current_phase = "finalizing"
+            else:
+                current_phase = "initializing"
+            
+            # Calculate elapsed time
+            elapsed_seconds = 0.0
+            started_at = research_session.started_at
+            if started_at:
+                elapsed_seconds = (datetime.utcnow() - started_at).total_seconds()
+            
+            return ProcessingDetails(
+                is_processing=True,
+                current_phase=current_phase,
+                progress_percent=progress_percent,
+                leads_total=leads_total,
+                leads_pending=queue_stats.pending,
+                leads_completed=leads_completed,
+                leads_failed=queue_stats.failed,
+                leads_skipped=queue_stats.skipped,
+                recent_entities=recent_entities,
+                recent_leads=recent_leads,
+                started_at=started_at,
+                elapsed_seconds=elapsed_seconds,
+            )
+            
+        except Exception as e:
+            logger.warning(f"Failed to get processing details for case {case_id}: {e}")
+            return ProcessingDetails(
+                is_processing=True,
+                current_phase="processing",
             )
 
     async def get_pending_matches(

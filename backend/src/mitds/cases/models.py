@@ -362,6 +362,23 @@ class CaseStats(BaseModel):
     leads_pending: int = 0
 
 
+class ProcessingDetails(BaseModel):
+    """Detailed processing information for an active case."""
+
+    is_processing: bool = False
+    current_phase: str = Field(default="idle", description="Current processing phase")
+    progress_percent: float = Field(default=0.0, description="Estimated progress 0-100")
+    leads_total: int = 0
+    leads_pending: int = 0
+    leads_completed: int = 0
+    leads_failed: int = 0
+    leads_skipped: int = 0
+    recent_entities: list[str] = Field(default_factory=list, description="Recently discovered entity names")
+    recent_leads: list[str] = Field(default_factory=list, description="Recent lead targets being processed")
+    started_at: datetime | None = None
+    elapsed_seconds: float = 0.0
+
+
 class Case(BaseModel):
     """A research investigation started from an entry point.
 

@@ -949,6 +949,21 @@ export interface CaseStats {
   leads_pending: number;
 }
 
+export interface ProcessingDetails {
+  is_processing: boolean;
+  current_phase: string;
+  progress_percent: number;
+  leads_total: number;
+  leads_pending: number;
+  leads_completed: number;
+  leads_failed: number;
+  leads_skipped: number;
+  recent_entities: string[];
+  recent_leads: string[];
+  started_at: string | null;
+  elapsed_seconds: number;
+}
+
 export interface CaseSummary {
   id: string;
   name: string;
@@ -1114,6 +1129,11 @@ export const resumeCase = async (id: string): Promise<CaseResponse> => {
 
 export const getCaseReport = async (id: string, format: 'json' | 'markdown' = 'json'): Promise<CaseReport | string> => {
   const response = await apiClient.get(`/cases/${id}/report`, { params: { format } });
+  return response.data;
+};
+
+export const getCaseProcessingDetails = async (id: string): Promise<ProcessingDetails> => {
+  const response = await apiClient.get(`/cases/${id}/processing`);
   return response.data;
 };
 

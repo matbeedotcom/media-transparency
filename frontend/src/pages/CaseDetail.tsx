@@ -9,11 +9,13 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getCase,
   getCaseReport,
+  getCaseProcessingDetails,
   startCase,
   pauseCase,
   resumeCase,
   type CaseResponse,
   type CaseReport,
+  type ProcessingDetails,
 } from '../services/api';
 import { CaseReportComponent } from '../components/cases/CaseReport';
 
@@ -32,6 +34,20 @@ const statusIcons: Record<string, string> = {
   completed: '✅',
   failed: '❌',
 };
+
+function formatElapsedTime(seconds: number): string {
+  if (seconds < 60) {
+    return `${Math.floor(seconds)}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = Math.floor(seconds % 60);
+  if (minutes < 60) {
+    return `${minutes}m ${remainingSeconds}s`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return `${hours}h ${remainingMinutes}m`;
+}
 
 export default function CaseDetail() {
   const { id } = useParams<{ id: string }>();
@@ -52,6 +68,13 @@ export default function CaseDetail() {
     queryKey: ['case-report', id],
     queryFn: () => getCaseReport(id!, 'json') as Promise<CaseReport>,
     enabled: !!id && caseData?.status === 'completed',
+  });
+
+  const { data: processingDetails } = useQuery({
+    queryKey: ['case-processing', id],
+    queryFn: () => getCaseProcessingDetails(id!),
+    refetchInterval: caseData?.status === 'processing' ? 2000 : false,
+    enabled: !!id && caseData?.status === 'processing',
   });
 
   const startMutation = useMutation({
@@ -200,16 +223,74 @@ export default function CaseDetail() {
       {/* Processing indicator */}
       {caseData.status === 'processing' && (
         <div className="card processing-card">
-          <div className="processing-indicator">
-            <div className="spinner" />
-            <div>
-              <h3>Processing...</h3>
-              <p>
-                {caseData.stats.leads_processed} leads processed,{' '}
-                {caseData.stats.leads_pending} remaining
-              </p>
+          <div className="processing-header">
+            <div className="processing-indicator">
+              <div className="spinner" />
+              <div>
+                <h3>Processing...</h3>
+                <p className="phase-text">
+                  {processingDetails?.current_phase === 'processing_leads' && 'Processing leads'}
+                  {processingDetails?.current_phase === 'initializing' && 'Initializing research session'}
+                  {processingDetails?.current_phase === 'finalizing' && 'Finalizing results'}
+                  {!processingDetails && 'Starting...'}
+                </p>
+              </div>
             </div>
+            {processingDetails && processingDetails.progress_percent > 0 && (
+              <div className="progress-badge">
+                {processingDetails.progress_percent.toFixed(0)}%
+              </div>
+            )}
           </div>
+          
+          {/* Progress bar */}
+          {processingDetails && processingDetails.leads_total > 0 && (
+            <div className="progress-section">
+              <div className="progress-bar-container">
+                <div 
+                  className="progress-bar-fill" 
+                  style={{ width: `${processingDetails.progress_percent}%` }}
+                />
+              </div>
+              <div className="progress-stats">
+                <span>{processingDetails.leads_completed} / {processingDetails.leads_total} leads</span>
+                {processingDetails.leads_failed > 0 && (
+                  <span className="failed-count">{processingDetails.leads_failed} failed</span>
+                )}
+                {processingDetails.elapsed_seconds > 0 && (
+                  <span className="elapsed-time">
+                    {formatElapsedTime(processingDetails.elapsed_seconds)}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+          
+          {/* Recent activity */}
+          {processingDetails && (processingDetails.recent_entities.length > 0 || processingDetails.recent_leads.length > 0) && (
+            <div className="recent-activity">
+              {processingDetails.recent_entities.length > 0 && (
+                <div className="activity-section">
+                  <h4>Recently Discovered</h4>
+                  <ul className="activity-list">
+                    {processingDetails.recent_entities.map((name, idx) => (
+                      <li key={idx} className="entity-item">{name}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {processingDetails.recent_leads.length > 0 && (
+                <div className="activity-section">
+                  <h4>Currently Processing</h4>
+                  <ul className="activity-list">
+                    {processingDetails.recent_leads.map((lead, idx) => (
+                      <li key={idx} className="lead-item">{lead}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -297,6 +378,13 @@ export default function CaseDetail() {
           background: var(--bg-secondary);
         }
 
+        .processing-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          margin-bottom: var(--spacing-md);
+        }
+
         .processing-indicator {
           display: flex;
           align-items: center;
@@ -310,6 +398,92 @@ export default function CaseDetail() {
         .processing-indicator p {
           color: var(--text-secondary);
           margin: 0;
+        }
+
+        .phase-text {
+          font-size: 0.875rem;
+        }
+
+        .progress-badge {
+          font-size: 1.5rem;
+          font-weight: 700;
+          color: var(--primary);
+        }
+
+        .progress-section {
+          margin-bottom: var(--spacing-md);
+        }
+
+        .progress-bar-container {
+          width: 100%;
+          height: 8px;
+          background: var(--border-color);
+          border-radius: 4px;
+          overflow: hidden;
+          margin-bottom: var(--spacing-sm);
+        }
+
+        .progress-bar-fill {
+          height: 100%;
+          background: var(--primary);
+          border-radius: 4px;
+          transition: width 0.3s ease;
+        }
+
+        .progress-stats {
+          display: flex;
+          justify-content: space-between;
+          font-size: 0.875rem;
+          color: var(--text-secondary);
+        }
+
+        .failed-count {
+          color: #ef4444;
+        }
+
+        .elapsed-time {
+          font-variant-numeric: tabular-nums;
+        }
+
+        .recent-activity {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+          gap: var(--spacing-md);
+          padding-top: var(--spacing-md);
+          border-top: 1px solid var(--border-color);
+        }
+
+        .activity-section h4 {
+          font-size: 0.875rem;
+          font-weight: 600;
+          margin-bottom: var(--spacing-sm);
+          color: var(--text-secondary);
+        }
+
+        .activity-list {
+          list-style: none;
+          padding: 0;
+          margin: 0;
+        }
+
+        .activity-list li {
+          padding: var(--spacing-xs) 0;
+          font-size: 0.875rem;
+          border-bottom: 1px solid var(--border-color);
+        }
+
+        .activity-list li:last-child {
+          border-bottom: none;
+        }
+
+        .entity-item {
+          color: var(--text-primary);
+        }
+
+        .lead-item {
+          color: var(--text-secondary);
+          font-family: monospace;
+          font-size: 0.8rem;
         }
 
         .loading {

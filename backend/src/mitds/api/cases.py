@@ -19,6 +19,7 @@ from ..cases.models import (
     CreateCaseRequest,
     EntityMatchResponse,
     MatchStatus,
+    ProcessingDetails,
 )
 from ..cases.reports.generator import ReportGenerator, get_report_generator
 from ..cases.reports.templates import export_report
@@ -127,6 +128,26 @@ async def resume_case(
         return _case_to_response(case)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/{case_id}/processing", response_model=ProcessingDetails)
+async def get_case_processing(
+    case_id: UUID,
+    manager: CaseManager = Depends(get_case_manager),
+) -> ProcessingDetails:
+    """Get detailed processing information for an active case.
+    
+    Returns real-time processing statistics including:
+    - Current processing phase
+    - Progress percentage
+    - Lead counts (pending, completed, failed)
+    - Recently discovered entities
+    - Current leads being processed
+    """
+    try:
+        return await manager.get_processing_details(case_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 # =============================================================================
