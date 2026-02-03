@@ -1,0 +1,95 @@
+# Job schemas
+# Background job management
+
+JobStatus:
+  type: object
+  required:
+    - job_id
+    - job_type
+    - status
+    - created_at
+  properties:
+    job_id:
+      type: string
+      format: uuid
+    job_type:
+      type: string
+      description: Type of job (e.g., detection, ingestion, report)
+    status:
+      type: string
+      enum:
+        - pending
+        - running
+        - completed
+        - failed
+        - cancelled
+    created_at:
+      type: string
+      format: date-time
+    started_at:
+      type: string
+      format: date-time
+    completed_at:
+      type: string
+      format: date-time
+    progress:
+      type: number
+      minimum: 0
+      maximum: 100
+      description: Progress percentage
+    metadata:
+      type: object
+      additionalProperties: true
+      description: Job-specific metadata
+    error:
+      type: string
+      description: Error message if failed
+
+JobResult:
+  type: object
+  required:
+    - job_id
+    - job_type
+    - status
+  properties:
+    job_id:
+      type: string
+      format: uuid
+    job_type:
+      type: string
+    status:
+      type: string
+      enum:
+        - completed
+        - failed
+    created_at:
+      type: string
+      format: date-time
+    completed_at:
+      type: string
+      format: date-time
+    result:
+      type: object
+      additionalProperties: true
+      description: Job result data (structure depends on job type)
+    error:
+      type: string
+
+JobList:
+  type: object
+  required:
+    - jobs
+    - total
+    - limit
+    - offset
+  properties:
+    jobs:
+      type: array
+      items:
+        $ref: '#/JobStatus'
+    total:
+      type: integer
+    limit:
+      type: integer
+    offset:
+      type: integer

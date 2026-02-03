@@ -1,0 +1,578 @@
+# Ingestion API paths
+# Data ingestion from external sources
+
+paths:
+  /api/v1/ingestion/search:
+    get:
+      operationId: searchCompanies
+      summary: Search companies across sources
+      description: |
+        Search for companies across multiple data sources including:
+        - OpenCorporates
+        - SEC EDGAR
+        - SEDAR+
+        - Canada Corporations
+        - Provincial registries
+
+        Aggregates results and deduplicates by identifier.
+      tags:
+        - Ingestion
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Company name to search
+          schema:
+            type: string
+        - name: sources
+          in: query
+          description: Comma-separated list of sources to search
+          schema:
+            type: string
+          example: "opencorp,sec_edgar,sedar"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  query:
+                    type: string
+                  results:
+                    type: array
+                    items:
+                      $ref: '../components/schemas/ingestion.yaml#/CompanySearchResult'
+                  sources_searched:
+                    type: array
+                    items:
+                      type: string
+                  sources_failed:
+                    type: array
+                    items:
+                      type: string
+
+  /api/v1/ingestion/autocomplete:
+    get:
+      operationId: autocompleteEntities
+      summary: Autocomplete entity names
+      description: Fast autocomplete for entity names in the database.
+      tags:
+        - Ingestion
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 2
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 10
+        - name: types
+          in: query
+          description: Comma-separated entity types to include
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Autocomplete suggestions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  suggestions:
+                    type: array
+                    items:
+                      $ref: '../components/schemas/ingestion.yaml#/AutocompleteSuggestion'
+
+  /api/v1/ingestion/status:
+    get:
+      operationId: getIngestionStatus
+      summary: Get ingestion status
+      description: Get status of all ingestion sources and recent runs.
+      tags:
+        - Ingestion
+      responses:
+        '200':
+          description: Ingestion status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sources:
+                    type: object
+                    additionalProperties:
+                      type: object
+                      properties:
+                        enabled:
+                          type: boolean
+                        last_run:
+                          type: string
+                          format: date-time
+                        last_status:
+                          type: string
+                        records_total:
+                          type: integer
+
+  /api/v1/ingestion/runs:
+    get:
+      operationId: listIngestionRuns
+      summary: List ingestion runs
+      description: Get history of ingestion runs with filtering options.
+      tags:
+        - Ingestion
+      parameters:
+        - name: source
+          in: query
+          description: Filter by source
+          schema:
+            type: string
+        - name: status
+          in: query
+          description: Filter by status
+          schema:
+            type: string
+            enum: [pending, running, completed, failed, cancelled]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: Ingestion runs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runs:
+                    type: array
+                    items:
+                      $ref: '../components/schemas/ingestion.yaml#/IngestionRunResponse'
+
+  /api/v1/ingestion/runs/{run_id}:
+    get:
+      operationId: getIngestionRun
+      summary: Get ingestion run details
+      tags:
+        - Ingestion
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Run details
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/ingestion.yaml#/IngestionRunResponse'
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+
+  /api/v1/ingestion/runs/{run_id}/logs:
+    get:
+      operationId: getIngestionRunLogs
+      summary: Get ingestion run logs
+      tags:
+        - Ingestion
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: Log entries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  logs:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        timestamp:
+                          type: string
+                          format: date-time
+                        level:
+                          type: string
+                        message:
+                          type: string
+                  has_more:
+                    type: boolean
+
+  /api/v1/ingestion/{source}/trigger:
+    post:
+      operationId: triggerIngestion
+      summary: Trigger ingestion run
+      description: |
+        Start an ingestion run for a specific source.
+        Available sources: irs990, cra, sec_edgar, sedar, canada_corps,
+        opencorporates, meta_ads, littlesis
+      tags:
+        - Ingestion
+      parameters:
+        - name: source
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [irs990, cra, sec_edgar, sedar, canada_corps, opencorporates, meta_ads, littlesis]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '../components/schemas/ingestion.yaml#/IngestionTriggerRequest'
+      responses:
+        '202':
+          description: Ingestion started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run_id:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                  status_url:
+                    type: string
+
+  /api/v1/ingestion/provincial:
+    get:
+      operationId: listProvincialSources
+      summary: List provincial data sources
+      description: Get list of available provincial corporate registry sources.
+      tags:
+        - Ingestion
+      responses:
+        '200':
+          description: Provincial sources
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sources:
+                    type: array
+                    items:
+                      $ref: '../components/schemas/ingestion.yaml#/ProvincialDataSource'
+
+  /api/v1/ingestion/provincial/{province}:
+    post:
+      operationId: triggerProvincialIngestion
+      summary: Trigger provincial ingestion
+      description: Start ingestion from a provincial corporate registry.
+      tags:
+        - Ingestion
+      parameters:
+        - name: province
+          in: path
+          required: true
+          description: Province code (e.g., AB, ON, QC)
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '../components/schemas/ingestion.yaml#/ProvincialIngestionRequest'
+      responses:
+        '202':
+          description: Ingestion started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run_id:
+                    type: string
+                    format: uuid
+                  province:
+                    type: string
+                  status:
+                    type: string
+
+  /api/v1/ingestion/provincial/{province}/status:
+    get:
+      operationId: getProvincialStatus
+      summary: Get provincial ingestion status
+      tags:
+        - Ingestion
+      parameters:
+        - name: province
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Provincial status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  province:
+                    type: string
+                  last_ingestion:
+                    type: string
+                    format: date-time
+                  records_count:
+                    type: integer
+                  status:
+                    type: string
+
+  /api/v1/ingestion/provincial/batch:
+    post:
+      operationId: triggerProvincialBatch
+      summary: Batch provincial ingestion
+      description: Start ingestion from multiple provinces simultaneously.
+      tags:
+        - Ingestion
+      parameters:
+        - name: provinces
+          in: query
+          description: Comma-separated province codes
+          schema:
+            type: string
+          example: "AB,QC,NS"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '../components/schemas/ingestion.yaml#/ProvincialIngestionRequest'
+      responses:
+        '202':
+          description: Batch started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runs:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        run_id:
+                          type: string
+                          format: uuid
+                        province:
+                          type: string
+
+  /api/v1/ingestion/provincial/cross-reference:
+    post:
+      operationId: triggerCrossReference
+      summary: Trigger cross-reference
+      description: |
+        Cross-reference provincial corporations with federal registry
+        to identify matches and link entities.
+      tags:
+        - Ingestion
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '../components/schemas/ingestion.yaml#/CrossReferenceRequest'
+      responses:
+        '202':
+          description: Cross-reference started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id:
+                    type: string
+                    format: uuid
+
+  /api/v1/ingestion/provincial/cross-reference/review:
+    get:
+      operationId: getCrossReferenceReview
+      summary: Get cross-reference review items
+      description: Get items flagged for manual review during cross-reference.
+      tags:
+        - Ingestion
+      parameters:
+        - name: province
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: Review items
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '../components/schemas/ingestion.yaml#/ReviewItem'
+                  total:
+                    type: integer
+
+  /api/v1/ingestion/linkedin/status:
+    get:
+      operationId: getLinkedInStatus
+      summary: Get LinkedIn ingestion status
+      tags:
+        - Ingestion
+      responses:
+        '200':
+          description: LinkedIn status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  authenticated:
+                    type: boolean
+                  companies_indexed:
+                    type: integer
+                  members_indexed:
+                    type: integer
+
+  /api/v1/ingestion/linkedin:
+    post:
+      operationId: triggerLinkedInIngestion
+      summary: Trigger LinkedIn ingestion
+      description: |
+        Ingest LinkedIn company members.
+        Supports CSV import or browser scraping with session cookie.
+      tags:
+        - Ingestion
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '../components/schemas/ingestion.yaml#/LinkedInIngestionRequest'
+      responses:
+        '202':
+          description: Ingestion started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run_id:
+                    type: string
+                    format: uuid
+
+  /api/v1/ingestion/linkedin/members:
+    get:
+      operationId: getLinkedInMembers
+      summary: Get LinkedIn members
+      description: Search indexed LinkedIn members.
+      tags:
+        - Ingestion
+      parameters:
+        - name: company
+          in: query
+          schema:
+            type: string
+        - name: title
+          in: query
+          schema:
+            type: string
+        - name: is_executive
+          in: query
+          schema:
+            type: boolean
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: LinkedIn members
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  members:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        title:
+                          type: string
+                        company:
+                          type: string
+                        is_executive:
+                          type: boolean
+                        entity_id:
+                          type: string
+                          format: uuid
+                  total:
+                    type: integer
+
+  /api/v1/ingestion/quick-ingest:
+    post:
+      operationId: quickIngest
+      summary: Quick corporation ingest
+      description: |
+        Quickly ingest a single corporation by searching across all sources.
+        Creates/updates entity and relationships from found data.
+      tags:
+        - Ingestion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '../components/schemas/ingestion.yaml#/QuickIngestRequest'
+      responses:
+        '200':
+          description: Ingest result
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/ingestion.yaml#/QuickIngestResponse'

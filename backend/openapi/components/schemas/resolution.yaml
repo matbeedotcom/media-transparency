@@ -1,0 +1,173 @@
+# Resolution schemas
+# Entity resolution and reconciliation
+
+MatchStrategy:
+  type: string
+  enum:
+    - EXACT_NAME
+    - FUZZY_NAME
+    - IDENTIFIER_MATCH
+    - MULTI_SIGNAL
+  description: Strategy used to find the match
+
+ResolutionStatus:
+  type: string
+  enum:
+    - PENDING
+    - IN_PROGRESS
+    - APPROVED
+    - REJECTED
+    - MERGED
+  description: Status of resolution candidate
+
+ResolutionPriority:
+  type: string
+  enum:
+    - LOW
+    - MEDIUM
+    - HIGH
+    - CRITICAL
+  description: Priority of resolution candidate
+
+# Candidate response
+CandidateResponse:
+  type: object
+  required:
+    - id
+    - status
+    - source_entity_id
+    - candidate_entity_id
+    - match_confidence
+  properties:
+    id:
+      type: string
+      format: uuid
+    status:
+      $ref: '#/ResolutionStatus'
+    priority:
+      $ref: '#/ResolutionPriority'
+    source_entity_id:
+      type: string
+      format: uuid
+    source_entity_name:
+      type: string
+    source_entity_type:
+      $ref: 'entities.yaml#/EntityType'
+    candidate_entity_id:
+      type: string
+      format: uuid
+    candidate_entity_name:
+      type: string
+    candidate_entity_type:
+      $ref: 'entities.yaml#/EntityType'
+    match_strategy:
+      $ref: '#/MatchStrategy'
+    match_confidence:
+      type: number
+      minimum: 0
+      maximum: 1
+    match_details:
+      type: object
+      properties:
+        name_similarity:
+          type: number
+        identifier_matches:
+          type: array
+          items:
+            type: string
+        shared_relationships:
+          type: integer
+        jurisdiction_match:
+          type: boolean
+    created_at:
+      type: string
+      format: date-time
+    assigned_to:
+      type: string
+
+# Statistics
+ResolutionStatsResponse:
+  type: object
+  properties:
+    total_pending:
+      type: integer
+    total_in_progress:
+      type: integer
+    total_completed:
+      type: integer
+    total_approved:
+      type: integer
+    total_rejected:
+      type: integer
+    total_merged:
+      type: integer
+    avg_confidence:
+      type: number
+    by_priority:
+      type: object
+      additionalProperties:
+        type: integer
+    by_strategy:
+      type: object
+      additionalProperties:
+        type: integer
+
+# Cross-border resolution
+CrossBorderRequest:
+  type: object
+  properties:
+    target_country:
+      type: string
+      description: Country to match entities in (e.g., 'CA')
+      example: CA
+    limit:
+      type: integer
+      default: 100
+    auto_merge_threshold:
+      type: number
+      default: 0.95
+      description: Threshold for automatic merging
+    auto_merge:
+      type: boolean
+      default: false
+      description: Automatically merge high-confidence matches
+
+CrossBorderResponse:
+  type: object
+  properties:
+    status:
+      type: string
+    target_country:
+      type: string
+    total_unresolved:
+      type: integer
+    total_processed:
+      type: integer
+    auto_merged:
+      type: integer
+    queued_for_review:
+      type: integer
+    no_match:
+      type: integer
+    errors:
+      type: integer
+    results:
+      type: array
+      items:
+        type: object
+        properties:
+          us_entity_id:
+            type: string
+            format: uuid
+          us_entity_name:
+            type: string
+          ca_entity_id:
+            type: string
+            format: uuid
+          ca_entity_name:
+            type: string
+          confidence:
+            type: number
+          action:
+            type: string
+            enum: [auto_merged, queued_review, no_match]

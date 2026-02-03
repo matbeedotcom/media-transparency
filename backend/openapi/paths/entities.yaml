@@ -1,0 +1,208 @@
+# Entities API paths
+# Entity search, retrieval, and management operations
+
+paths:
+  /api/v1/entities:
+    get:
+      operationId: searchEntities
+      summary: Search entities
+      description: |
+        Search for entities by name, type, or jurisdiction.
+        Supports full-text search and filtering.
+        Results are paginated.
+      tags:
+        - Entities
+      parameters:
+        - name: q
+          in: query
+          description: Search query string (searches name and aliases)
+          schema:
+            type: string
+          example: "Foundation"
+        - name: type
+          in: query
+          description: Filter by entity type
+          schema:
+            $ref: '../components/schemas/entities.yaml#/EntityType'
+        - name: jurisdiction
+          in: query
+          description: Filter by jurisdiction (e.g., 'US', 'CA', 'CA-ON')
+          schema:
+            type: string
+          example: "US"
+        - $ref: '../components/parameters.yaml#/LimitParam'
+        - $ref: '../components/parameters.yaml#/OffsetParam'
+      responses:
+        '200':
+          description: Paginated list of entities
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/common.yaml#/PaginatedEntityResponse'
+        '400':
+          $ref: '../components/responses.yaml#/BadRequest'
+
+  /api/v1/entities/{entity_id}:
+    get:
+      operationId: getEntity
+      summary: Get entity by ID
+      description: Retrieve full details of a specific entity including aliases and properties.
+      tags:
+        - Entities
+      parameters:
+        - $ref: '../components/parameters.yaml#/EntityIdParam'
+      responses:
+        '200':
+          description: Entity details
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/entities.yaml#/EntityResponse'
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+
+  /api/v1/entities/{entity_id}/relationships:
+    get:
+      operationId: getEntityRelationships
+      summary: Get entity relationships
+      description: |
+        Retrieve relationships for a specific entity.
+        Supports filtering by relationship type, direction, and temporal queries.
+      tags:
+        - Entities
+      parameters:
+        - $ref: '../components/parameters.yaml#/EntityIdParam'
+        - name: rel_type
+          in: query
+          description: Filter by relationship type
+          schema:
+            $ref: '../components/schemas/relationships.yaml#/RelationType'
+        - name: direction
+          in: query
+          description: Filter by relationship direction
+          schema:
+            type: string
+            enum: [incoming, outgoing, both]
+            default: both
+        - name: as_of
+          in: query
+          description: Get relationships valid at this date (ISO 8601)
+          schema:
+            type: string
+            format: date-time
+        - $ref: '../components/parameters.yaml#/LimitParam'
+      responses:
+        '200':
+          description: List of relationships
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  relationships:
+                    type: array
+                    items:
+                      $ref: '../components/schemas/relationships.yaml#/RelationshipResponse'
+                  total:
+                    type: integer
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+
+  /api/v1/entities/{entity_id}/evidence:
+    get:
+      operationId: getEntityEvidence
+      summary: Get entity evidence
+      description: Retrieve evidence records that support this entity's data.
+      tags:
+        - Entities
+      parameters:
+        - $ref: '../components/parameters.yaml#/EntityIdParam'
+        - $ref: '../components/parameters.yaml#/LimitParam'
+      responses:
+        '200':
+          description: List of evidence records
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  evidence:
+                    type: array
+                    items:
+                      $ref: '../components/schemas/common.yaml#/EvidenceResponse'
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+
+  /api/v1/entities/{entity_id}/stats:
+    get:
+      operationId: getEntityStats
+      summary: Get entity statistics
+      description: |
+        Retrieve computed statistics for an entity including:
+        - Relationship counts by type
+        - Funding totals received/given
+        - Evidence counts
+        - Connected entity counts
+      tags:
+        - Entities
+      parameters:
+        - $ref: '../components/parameters.yaml#/EntityIdParam'
+      responses:
+        '200':
+          description: Entity statistics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  relationship_counts:
+                    type: object
+                    additionalProperties:
+                      type: integer
+                  funding_received:
+                    type: number
+                  funding_given:
+                    type: number
+                  evidence_count:
+                    type: integer
+                  connected_entities:
+                    type: integer
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+
+  /api/v1/entities/{entity_id}/board-interlocks:
+    get:
+      operationId: getEntityBoardInterlocks
+      summary: Get board interlocks
+      description: |
+        Find organizations that share board members with this entity.
+        Returns a list of interlocking organizations with the shared directors.
+      tags:
+        - Entities
+      parameters:
+        - $ref: '../components/parameters.yaml#/EntityIdParam'
+      responses:
+        '200':
+          description: Board interlock analysis
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  interlocks:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        organization:
+                          $ref: '../components/schemas/entities.yaml#/EntitySummary'
+                        shared_directors:
+                          type: array
+                          items:
+                            $ref: '../components/schemas/entities.yaml#/EntitySummary'
+                        interlock_score:
+                          type: number
+                  total:
+                    type: integer
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'

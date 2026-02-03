@@ -1,0 +1,147 @@
+# Validation schemas
+# Data validation framework for testing detection algorithms
+
+# Validation requests
+ValidationRunRequest:
+  type: object
+  properties:
+    dataset_id:
+      type: string
+      description: Golden dataset to validate against
+    include_synthetic:
+      type: boolean
+      default: false
+      description: Include synthetic test cases
+    threshold:
+      type: number
+      description: Detection threshold to test
+    synthetic_seed:
+      type: integer
+      description: Random seed for synthetic generation
+
+ValidationRunResponse:
+  type: object
+  required:
+    - job_id
+    - status
+  properties:
+    job_id:
+      type: string
+      format: uuid
+    status:
+      type: string
+    status_url:
+      type: string
+    estimated_cases:
+      type: integer
+
+# Metrics
+MetricsResponse:
+  type: object
+  required:
+    - recall
+    - precision
+    - f1_score
+    - false_positive_rate
+  properties:
+    recall:
+      type: number
+      minimum: 0
+      maximum: 1
+      description: True positive rate (sensitivity)
+    precision:
+      type: number
+      minimum: 0
+      maximum: 1
+      description: Positive predictive value
+    f1_score:
+      type: number
+      minimum: 0
+      maximum: 1
+      description: Harmonic mean of precision and recall
+    false_positive_rate:
+      type: number
+      minimum: 0
+      maximum: 1
+      description: Rate of false positives
+    accuracy:
+      type: number
+      minimum: 0
+      maximum: 1
+    total_cases:
+      type: integer
+    passed_cases:
+      type: integer
+    failed_cases:
+      type: integer
+    last_run_at:
+      type: string
+      format: date-time
+    meets_targets:
+      type: boolean
+      description: Whether metrics meet target thresholds
+    target_recall:
+      type: number
+      description: Target recall threshold
+    target_max_fpr:
+      type: number
+      description: Maximum acceptable false positive rate
+
+# Dashboard
+DashboardResponse:
+  type: object
+  properties:
+    summary:
+      $ref: '#/MetricsResponse'
+    history:
+      type: array
+      items:
+        type: object
+        properties:
+          timestamp:
+            type: string
+            format: date-time
+          metrics:
+            $ref: '#/MetricsResponse'
+    by_case_type:
+      type: object
+      additionalProperties:
+        $ref: '#/MetricsResponse'
+    signal_performance:
+      type: object
+      additionalProperties:
+        type: object
+        properties:
+          detection_rate:
+            type: number
+          false_positive_rate:
+            type: number
+          average_confidence:
+            type: number
+    recent_failures:
+      type: array
+      items:
+        type: object
+        properties:
+          case_id:
+            type: string
+          case_type:
+            type: string
+          expected:
+            type: string
+          actual:
+            type: string
+          details:
+            type: string
+    health_checks:
+      type: object
+      properties:
+        data_freshness:
+          type: string
+          enum: [healthy, stale, critical]
+        model_drift:
+          type: string
+          enum: [stable, drifting, critical]
+        coverage:
+          type: number
+          description: Percentage of entity types covered

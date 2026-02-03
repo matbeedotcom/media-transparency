@@ -1,0 +1,360 @@
+# Research API paths
+# Research session management for automated entity discovery
+
+paths:
+  /api/v1/research/sessions:
+    get:
+      operationId: listResearchSessions
+      summary: List research sessions
+      description: Get list of research sessions with filtering options.
+      tags:
+        - Research
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [initializing, running, paused, completed, failed]
+        - $ref: '../components/parameters.yaml#/LimitParam'
+        - $ref: '../components/parameters.yaml#/OffsetParam'
+      responses:
+        '200':
+          description: Research sessions
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/research.yaml#/SessionListResponse'
+
+    post:
+      operationId: createResearchSession
+      summary: Create research session
+      description: |
+        Create a new research session starting from an entry point.
+        The session will automatically discover related entities and relationships.
+
+        Entry point types:
+        - `META_ADS`: Start from Meta Ad Library search
+        - `COMPANY`: Start from a company name
+        - `EIN`: Start from a US nonprofit EIN
+        - `BN`: Start from a Canadian Business Number
+        - `NONPROFIT`: Start from a nonprofit name
+        - `ENTITY_ID`: Start from an existing entity
+      tags:
+        - Research
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '../components/schemas/research.yaml#/CreateSessionRequest'
+      responses:
+        '201':
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/research.yaml#/SessionResponse'
+
+  /api/v1/research/sessions/{session_id}:
+    get:
+      operationId: getResearchSession
+      summary: Get research session
+      description: Get details of a specific research session.
+      tags:
+        - Research
+      parameters:
+        - $ref: '../components/parameters.yaml#/SessionIdParam'
+      responses:
+        '200':
+          description: Session details
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/research.yaml#/SessionResponse'
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+
+    delete:
+      operationId: deleteResearchSession
+      summary: Delete research session
+      description: Delete a research session and optionally its discovered data.
+      tags:
+        - Research
+      parameters:
+        - $ref: '../components/parameters.yaml#/SessionIdParam'
+      responses:
+        '200':
+          description: Session deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: boolean
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+
+  /api/v1/research/sessions/{session_id}/start:
+    post:
+      operationId: startResearchSession
+      summary: Start research session
+      description: Start processing a research session.
+      tags:
+        - Research
+      parameters:
+        - $ref: '../components/parameters.yaml#/SessionIdParam'
+      responses:
+        '200':
+          description: Session started
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/research.yaml#/SessionResponse'
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+        '409':
+          description: Session already running
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/common.yaml#/ErrorResponse'
+
+  /api/v1/research/sessions/{session_id}/pause:
+    post:
+      operationId: pauseResearchSession
+      summary: Pause research session
+      description: Pause a running research session.
+      tags:
+        - Research
+      parameters:
+        - $ref: '../components/parameters.yaml#/SessionIdParam'
+      responses:
+        '200':
+          description: Session paused
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/research.yaml#/SessionResponse'
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+
+  /api/v1/research/sessions/{session_id}/resume:
+    post:
+      operationId: resumeResearchSession
+      summary: Resume research session
+      description: Resume a paused research session.
+      tags:
+        - Research
+      parameters:
+        - $ref: '../components/parameters.yaml#/SessionIdParam'
+      responses:
+        '200':
+          description: Session resumed
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/research.yaml#/SessionResponse'
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+
+  /api/v1/research/sessions/{session_id}/entities:
+    get:
+      operationId: getSessionEntities
+      summary: Get session entities
+      description: Get entities discovered during a research session.
+      tags:
+        - Research
+      parameters:
+        - $ref: '../components/parameters.yaml#/SessionIdParam'
+        - name: depth
+          in: query
+          description: Filter by discovery depth
+          schema:
+            type: integer
+        - name: entity_type
+          in: query
+          schema:
+            $ref: '../components/schemas/entities.yaml#/EntityType'
+        - $ref: '../components/parameters.yaml#/LimitParam'
+        - $ref: '../components/parameters.yaml#/OffsetParam'
+      responses:
+        '200':
+          description: Session entities
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/research.yaml#/EntitiesListResponse'
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+
+  /api/v1/research/sessions/{session_id}/graph:
+    get:
+      operationId: getSessionGraph
+      summary: Get session graph
+      description: |
+        Get the entity relationship graph discovered during the session.
+        Returns nodes and edges for visualization.
+      tags:
+        - Research
+      parameters:
+        - $ref: '../components/parameters.yaml#/SessionIdParam'
+        - name: max_nodes
+          in: query
+          description: Maximum number of nodes to return
+          schema:
+            type: integer
+            default: 100
+      responses:
+        '200':
+          description: Session graph
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/research.yaml#/SessionGraph'
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+
+  /api/v1/research/sessions/{session_id}/leads:
+    get:
+      operationId: getSessionLeads
+      summary: Get session leads
+      description: |
+        Get leads discovered during the session.
+        Leads represent potential entities or relationships to explore.
+      tags:
+        - Research
+      parameters:
+        - $ref: '../components/parameters.yaml#/SessionIdParam'
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, in_progress, completed, skipped, failed]
+        - name: lead_type
+          in: query
+          schema:
+            type: string
+            enum: [ownership, funding, sponsorship, board_interlock, cross_border, infrastructure]
+        - $ref: '../components/parameters.yaml#/LimitParam'
+        - $ref: '../components/parameters.yaml#/OffsetParam'
+      responses:
+        '200':
+          description: Session leads
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/research.yaml#/LeadsListResponse'
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+
+  /api/v1/research/sessions/{session_id}/leads/{lead_id}/skip:
+    post:
+      operationId: skipLead
+      summary: Skip lead
+      description: Mark a lead as skipped with a reason.
+      tags:
+        - Research
+      parameters:
+        - $ref: '../components/parameters.yaml#/SessionIdParam'
+        - name: lead_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - reason
+              properties:
+                reason:
+                  type: string
+                  description: Reason for skipping
+      responses:
+        '200':
+          description: Lead skipped
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+
+  /api/v1/research/sessions/{session_id}/leads/{lead_id}/prioritize:
+    post:
+      operationId: prioritizeLead
+      summary: Prioritize lead
+      description: Change the priority of a lead.
+      tags:
+        - Research
+      parameters:
+        - $ref: '../components/parameters.yaml#/SessionIdParam'
+        - name: lead_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - priority
+              properties:
+                priority:
+                  type: integer
+                  minimum: 1
+                  maximum: 10
+      responses:
+        '200':
+          description: Priority updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+
+  /api/v1/research/sessions/{session_id}/leads/{lead_id}/requeue:
+    post:
+      operationId: requeueLead
+      summary: Requeue lead
+      description: Requeue a failed or skipped lead for processing.
+      tags:
+        - Research
+      parameters:
+        - $ref: '../components/parameters.yaml#/SessionIdParam'
+        - name: lead_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: priority
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Lead requeued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'

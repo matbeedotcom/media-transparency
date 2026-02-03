@@ -1,0 +1,233 @@
+# Reusable API parameters
+# Common query and path parameters used across multiple endpoints
+
+# Pagination parameters
+LimitParam:
+  name: limit
+  in: query
+  required: false
+  description: Maximum number of results to return
+  schema:
+    type: integer
+    default: 20
+    minimum: 1
+    maximum: 100
+
+OffsetParam:
+  name: offset
+  in: query
+  required: false
+  description: Number of results to skip for pagination
+  schema:
+    type: integer
+    default: 0
+    minimum: 0
+
+CursorParam:
+  name: cursor
+  in: query
+  required: false
+  description: Cursor for cursor-based pagination
+  schema:
+    type: string
+
+# Search parameters
+QueryParam:
+  name: q
+  in: query
+  required: false
+  description: Search query string
+  schema:
+    type: string
+    minLength: 1
+    maxLength: 500
+
+# Entity parameters
+EntityIdParam:
+  name: entity_id
+  in: path
+  required: true
+  description: Unique entity identifier (UUID)
+  schema:
+    type: string
+    format: uuid
+
+EntityTypeParam:
+  name: type
+  in: query
+  required: false
+  description: Filter by entity type
+  schema:
+    type: string
+    enum:
+      - PERSON
+      - ORGANIZATION
+      - OUTLET
+      - DOMAIN
+      - PLATFORM_ACCOUNT
+      - SPONSOR
+      - VENDOR
+
+JurisdictionParam:
+  name: jurisdiction
+  in: query
+  required: false
+  description: Filter by jurisdiction code (e.g., 'US', 'CA', 'CA-ON')
+  schema:
+    type: string
+    maxLength: 10
+
+# Job/Task parameters
+JobIdParam:
+  name: job_id
+  in: path
+  required: true
+  description: Background job identifier (UUID)
+  schema:
+    type: string
+    format: uuid
+
+# Case/Session parameters
+CaseIdParam:
+  name: case_id
+  in: path
+  required: true
+  description: Case identifier (UUID)
+  schema:
+    type: string
+    format: uuid
+
+SessionIdParam:
+  name: session_id
+  in: path
+  required: true
+  description: Research session identifier (UUID)
+  schema:
+    type: string
+    format: uuid
+
+# Status filters
+StatusParam:
+  name: status
+  in: query
+  required: false
+  description: Filter by status
+  schema:
+    type: string
+
+# Date/Time parameters
+FromDateParam:
+  name: from_date
+  in: query
+  required: false
+  description: Start date for filtering (ISO 8601)
+  schema:
+    type: string
+    format: date-time
+
+ToDateParam:
+  name: to_date
+  in: query
+  required: false
+  description: End date for filtering (ISO 8601)
+  schema:
+    type: string
+    format: date-time
+
+AsOfParam:
+  name: as_of
+  in: query
+  required: false
+  description: Point-in-time for temporal queries (ISO 8601)
+  schema:
+    type: string
+    format: date-time
+
+# Relationship parameters
+RelTypeParam:
+  name: rel_type
+  in: query
+  required: false
+  description: Filter by relationship type
+  schema:
+    type: string
+    enum:
+      - FUNDED_BY
+      - DIRECTOR_OF
+      - EMPLOYED_BY
+      - SPONSORED_BY
+      - OWNS
+      - CITED
+      - AMPLIFIED
+      - SHARED_INFRA
+
+DirectionParam:
+  name: direction
+  in: query
+  required: false
+  description: Relationship direction filter
+  schema:
+    type: string
+    enum:
+      - incoming
+      - outgoing
+      - both
+    default: both
+
+# Graph traversal parameters
+MaxHopsParam:
+  name: max_hops
+  in: query
+  required: false
+  description: Maximum path length for graph traversal
+  schema:
+    type: integer
+    default: 3
+    minimum: 1
+    maximum: 10
+
+DepthParam:
+  name: depth
+  in: query
+  required: false
+  description: Depth of graph exploration
+  schema:
+    type: integer
+    default: 2
+    minimum: 1
+    maximum: 5
+
+# Funding parameters
+FiscalYearParam:
+  name: fiscal_year
+  in: query
+  required: false
+  description: Filter by fiscal year
+  schema:
+    type: integer
+    minimum: 1990
+    maximum: 2100
+
+MinAmountParam:
+  name: min_amount
+  in: query
+  required: false
+  description: Minimum funding amount
+  schema:
+    type: number
+    minimum: 0
+
+# Format parameters
+FormatParam:
+  name: format
+  in: query
+  required: false
+  description: Output format
+  schema:
+    type: string
+    enum:
+      - json
+      - html
+      - pdf
+      - markdown
+    default: json

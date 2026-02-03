@@ -3,7 +3,10 @@
 Media Influence Topology & Detection System REST API.
 """
 
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,6 +19,33 @@ from mitds.logging import setup_logging, get_logger
 # Initialize logging
 setup_logging()
 logger = get_logger(__name__)
+
+# Path to external OpenAPI spec
+OPENAPI_SPEC_PATH = Path(__file__).parent.parent.parent / "openapi" / "openapi.yaml"
+
+
+def load_external_openapi_spec() -> dict[str, Any] | None:
+    """Load OpenAPI spec from external YAML file if it exists.
+    
+    Returns:
+        Parsed OpenAPI spec dict, or None if file doesn't exist or fails to load
+    """
+    if not OPENAPI_SPEC_PATH.exists():
+        logger.debug(f"External OpenAPI spec not found at {OPENAPI_SPEC_PATH}")
+        return None
+    
+    try:
+        import yaml
+        with open(OPENAPI_SPEC_PATH, "r", encoding="utf-8") as f:
+            spec = yaml.safe_load(f)
+        logger.info(f"Loaded external OpenAPI spec from {OPENAPI_SPEC_PATH}")
+        return spec
+    except ImportError:
+        logger.warning("PyYAML not installed, cannot load external OpenAPI spec")
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to load external OpenAPI spec: {e}")
+        return None
 
 
 @asynccontextmanager
@@ -92,6 +122,39 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# =========================
+# Custom OpenAPI Schema
+# =========================
+
+
+def custom_openapi() -> dict[str, Any]:
+    """Generate or load OpenAPI schema.
+    
+    If USE_EXTERNAL_OPENAPI env var is set to 'true' and the external spec exists,
+    loads from the modular YAML files. Otherwise, uses FastAPI's auto-generation
+    with customizations from mitds.api.docs.
+    """
+    if app.openapi_schema:
+        return app.openapi_schema
+    
+    # Check if we should use external spec
+    use_external = os.environ.get("USE_EXTERNAL_OPENAPI", "").lower() == "true"
+    
+    if use_external:
+        external_spec = load_external_openapi_spec()
+        if external_spec:
+            app.openapi_schema = external_spec
+            return app.openapi_schema
+    
+    # Fall back to auto-generated spec with customizations
+    from mitds.api.docs import customize_openapi
+    return customize_openapi(app)
+
+
+# Set custom openapi function
+app.openapi = custom_openapi
 
 
 # =========================

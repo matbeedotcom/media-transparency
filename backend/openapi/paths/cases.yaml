@@ -1,0 +1,365 @@
+# Cases API paths
+# Case management for autonomous investigations
+
+paths:
+  /api/v1/cases:
+    get:
+      operationId: listCases
+      summary: List cases
+      description: Get list of investigation cases with filtering options.
+      tags:
+        - Cases
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [initializing, processing, paused, completed, failed]
+        - name: created_by
+          in: query
+          schema:
+            type: string
+        - $ref: '../components/parameters.yaml#/LimitParam'
+        - $ref: '../components/parameters.yaml#/OffsetParam'
+      responses:
+        '200':
+          description: List of cases
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/cases.yaml#/CaseListResponse'
+
+    post:
+      operationId: createCase
+      summary: Create case
+      description: |
+        Create a new investigation case from an entry point.
+
+        Entry point types:
+        - `meta_ad`: Start from a Meta Ad (provide ad_id or snapshot URL)
+        - `corporation`: Start from a corporation name
+        - `url`: Start from a URL to analyze
+        - `text`: Start from free-form text to extract entities
+
+        The case will automatically:
+        1. Parse the entry point
+        2. Extract entities and relationships
+        3. Search for matches in the knowledge graph
+        4. Generate a report
+      tags:
+        - Cases
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '../components/schemas/cases.yaml#/CreateCaseRequest'
+      responses:
+        '201':
+          description: Case created
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/cases.yaml#/CaseResponse'
+
+  /api/v1/cases/{case_id}:
+    get:
+      operationId: getCase
+      summary: Get case
+      description: Get details of a specific case.
+      tags:
+        - Cases
+      parameters:
+        - $ref: '../components/parameters.yaml#/CaseIdParam'
+      responses:
+        '200':
+          description: Case details
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/cases.yaml#/CaseResponse'
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+
+    delete:
+      operationId: deleteCase
+      summary: Delete case
+      description: Delete a case and all associated data.
+      tags:
+        - Cases
+      parameters:
+        - $ref: '../components/parameters.yaml#/CaseIdParam'
+      responses:
+        '204':
+          description: Case deleted
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+
+  /api/v1/cases/{case_id}/start:
+    post:
+      operationId: startCase
+      summary: Start case processing
+      description: Start processing a case that was created but not started.
+      tags:
+        - Cases
+      parameters:
+        - $ref: '../components/parameters.yaml#/CaseIdParam'
+      responses:
+        '200':
+          description: Case started
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/cases.yaml#/CaseResponse'
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+        '409':
+          description: Case already running or completed
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/common.yaml#/ErrorResponse'
+
+  /api/v1/cases/{case_id}/pause:
+    post:
+      operationId: pauseCase
+      summary: Pause case
+      description: Pause a running case.
+      tags:
+        - Cases
+      parameters:
+        - $ref: '../components/parameters.yaml#/CaseIdParam'
+      responses:
+        '200':
+          description: Case paused
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/cases.yaml#/CaseResponse'
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+
+  /api/v1/cases/{case_id}/resume:
+    post:
+      operationId: resumeCase
+      summary: Resume case
+      description: Resume a paused case.
+      tags:
+        - Cases
+      parameters:
+        - $ref: '../components/parameters.yaml#/CaseIdParam'
+      responses:
+        '200':
+          description: Case resumed
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/cases.yaml#/CaseResponse'
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+
+  /api/v1/cases/{case_id}/processing:
+    get:
+      operationId: getCaseProcessing
+      summary: Get processing details
+      description: |
+        Get detailed processing status including:
+        - Current phase
+        - Progress percentage
+        - Leads processed/pending
+        - Recent entities discovered
+      tags:
+        - Cases
+      parameters:
+        - $ref: '../components/parameters.yaml#/CaseIdParam'
+      responses:
+        '200':
+          description: Processing details
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/cases.yaml#/ProcessingDetails'
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+
+  /api/v1/cases/{case_id}/report:
+    get:
+      operationId: getCaseReport
+      summary: Get case report
+      description: Get the generated report for a case.
+      tags:
+        - Cases
+      parameters:
+        - $ref: '../components/parameters.yaml#/CaseIdParam'
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [json, markdown]
+            default: json
+      responses:
+        '200':
+          description: Case report
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/cases.yaml#/CaseReport'
+            text/markdown:
+              schema:
+                type: string
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+
+    post:
+      operationId: generateCaseReport
+      summary: Generate case report
+      description: Generate or regenerate the report for a case.
+      tags:
+        - Cases
+      parameters:
+        - $ref: '../components/parameters.yaml#/CaseIdParam'
+      responses:
+        '200':
+          description: Report generated
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/cases.yaml#/CaseReport'
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+
+  /api/v1/cases/{case_id}/matches:
+    get:
+      operationId: listCaseMatches
+      summary: List case matches
+      description: |
+        Get entity matches found during case processing.
+        Matches link extracted entities to existing knowledge graph entities.
+      tags:
+        - Cases
+      parameters:
+        - $ref: '../components/parameters.yaml#/CaseIdParam'
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, approved, rejected, deferred]
+        - $ref: '../components/parameters.yaml#/LimitParam'
+        - $ref: '../components/parameters.yaml#/OffsetParam'
+      responses:
+        '200':
+          description: Case matches
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/cases.yaml#/MatchListResponse'
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+
+  /api/v1/cases/matches/{match_id}/approve:
+    post:
+      operationId: approveMatch
+      summary: Approve match
+      description: Approve an entity match to link entities.
+      tags:
+        - Cases
+      parameters:
+        - name: match_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: reviewed_by
+          in: query
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notes:
+                  type: string
+      responses:
+        '200':
+          description: Match approved
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/cases.yaml#/EntityMatchResponse'
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+
+  /api/v1/cases/matches/{match_id}/reject:
+    post:
+      operationId: rejectMatch
+      summary: Reject match
+      description: Reject an entity match.
+      tags:
+        - Cases
+      parameters:
+        - name: match_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: reviewed_by
+          in: query
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notes:
+                  type: string
+      responses:
+        '200':
+          description: Match rejected
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/cases.yaml#/EntityMatchResponse'
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+
+  /api/v1/cases/matches/{match_id}/defer:
+    post:
+      operationId: deferMatch
+      summary: Defer match
+      description: Defer match review for later.
+      tags:
+        - Cases
+      parameters:
+        - name: match_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: reviewed_by
+          in: query
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notes:
+                  type: string
+      responses:
+        '200':
+          description: Match deferred
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/cases.yaml#/EntityMatchResponse'
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'

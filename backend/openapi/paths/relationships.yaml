@@ -1,0 +1,617 @@
+# Relationships API paths
+# Relationship queries, funding paths, and graph traversal
+
+paths:
+  /api/v1/relationships/path:
+    get:
+      operationId: findShortestPath
+      summary: Find shortest path between entities
+      description: |
+        Find the shortest relationship path between two entities.
+        Uses graph traversal to find connections through shared relationships.
+      tags:
+        - Relationships
+      parameters:
+        - name: from_id
+          in: query
+          required: true
+          description: Source entity ID
+          schema:
+            type: string
+            format: uuid
+        - name: to_id
+          in: query
+          required: true
+          description: Target entity ID
+          schema:
+            type: string
+            format: uuid
+        - name: max_hops
+          in: query
+          description: Maximum path length
+          schema:
+            type: integer
+            default: 5
+            minimum: 1
+            maximum: 10
+        - name: rel_types
+          in: query
+          description: Relationship types to traverse (comma-separated)
+          schema:
+            type: string
+          example: "FUNDED_BY,OWNS"
+      responses:
+        '200':
+          description: Shortest path result
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/relationships.yaml#/PathResult'
+        '400':
+          $ref: '../components/responses.yaml#/BadRequest'
+
+  /api/v1/relationships/paths/all:
+    get:
+      operationId: findAllPaths
+      summary: Find all paths between entities
+      description: |
+        Find all relationship paths between two entities up to max_hops.
+        Returns multiple paths sorted by length.
+      tags:
+        - Relationships
+      parameters:
+        - name: from_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: to_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: max_hops
+          in: query
+          schema:
+            type: integer
+            default: 4
+            minimum: 1
+            maximum: 6
+        - name: rel_types
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 10
+      responses:
+        '200':
+          description: All paths found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  paths:
+                    type: array
+                    items:
+                      $ref: '../components/schemas/relationships.yaml#/PathResult'
+                  total:
+                    type: integer
+
+  /api/v1/relationships/connecting-entities:
+    get:
+      operationId: findConnectingEntities
+      summary: Find connecting entities
+      description: |
+        Find entities that connect a set of input entities.
+        Useful for discovering shared funders, board members, or other connectors.
+      tags:
+        - Relationships
+      parameters:
+        - name: entity_ids
+          in: query
+          required: true
+          description: Comma-separated list of entity IDs
+          schema:
+            type: string
+        - name: max_hops
+          in: query
+          schema:
+            type: integer
+            default: 2
+        - name: rel_types
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Connecting entities
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connectors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        entity:
+                          $ref: '../components/schemas/entities.yaml#/EntitySummary'
+                        connected_to:
+                          type: array
+                          items:
+                            type: string
+                            format: uuid
+                        connection_score:
+                          type: number
+
+  /api/v1/relationships/graph-at-time/{entity_id}:
+    get:
+      operationId: getGraphAtTime
+      summary: Get graph snapshot at time
+      description: |
+        Get the entity's relationship graph as it existed at a specific point in time.
+        Uses valid_from/valid_to timestamps on relationships.
+      tags:
+        - Relationships
+      parameters:
+        - name: entity_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: as_of
+          in: query
+          required: true
+          description: Point in time (ISO 8601)
+          schema:
+            type: string
+            format: date-time
+        - name: depth
+          in: query
+          schema:
+            type: integer
+            default: 2
+        - name: rel_types
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Graph snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  as_of:
+                    type: string
+                    format: date-time
+                  entities:
+                    type: array
+                    items:
+                      $ref: '../components/schemas/entities.yaml#/EntitySummary'
+                  relationships:
+                    type: array
+                    items:
+                      $ref: '../components/schemas/relationships.yaml#/RelationshipResponse'
+
+  /api/v1/relationships/changes:
+    get:
+      operationId: getRelationshipChanges
+      summary: Get relationship changes
+      description: |
+        Get changes to an entity's relationships over a time period.
+        Returns added, removed, and modified relationships.
+      tags:
+        - Relationships
+      parameters:
+        - name: entity_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: from_date
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - name: to_date
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - name: rel_types
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Relationship changes
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  added:
+                    type: array
+                    items:
+                      $ref: '../components/schemas/relationships.yaml#/RelationshipResponse'
+                  removed:
+                    type: array
+                    items:
+                      $ref: '../components/schemas/relationships.yaml#/RelationshipResponse'
+                  modified:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        relationship:
+                          $ref: '../components/schemas/relationships.yaml#/RelationshipResponse'
+                        changes:
+                          type: object
+
+  /api/v1/relationships/timeline:
+    get:
+      operationId: getRelationshipTimeline
+      summary: Get relationship timeline
+      description: Get the history of a specific relationship over time.
+      tags:
+        - Relationships
+      parameters:
+        - name: source_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: target_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: rel_type
+          in: query
+          schema:
+            $ref: '../components/schemas/relationships.yaml#/RelationType'
+      responses:
+        '200':
+          description: Relationship timeline
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  timeline:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        valid_from:
+                          type: string
+                          format: date-time
+                        valid_to:
+                          type: string
+                          format: date-time
+                        properties:
+                          type: object
+
+  /api/v1/relationships/funding-paths/{funder_id}:
+    get:
+      operationId: getFundingPaths
+      summary: Get funding paths from funder
+      description: |
+        Trace funding flows from a funder to recipients.
+        Follows FUNDED_BY relationships through intermediaries.
+      tags:
+        - Relationships
+      parameters:
+        - name: funder_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: max_hops
+          in: query
+          schema:
+            type: integer
+            default: 3
+        - name: min_amount
+          in: query
+          description: Minimum funding amount
+          schema:
+            type: number
+        - name: fiscal_year
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Funding paths
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  funder:
+                    $ref: '../components/schemas/entities.yaml#/EntitySummary'
+                  paths:
+                    type: array
+                    items:
+                      $ref: '../components/schemas/relationships.yaml#/FundingPath'
+
+  /api/v1/relationships/funding-recipients/{funder_id}:
+    get:
+      operationId: getFundingRecipients
+      summary: Get funding recipients
+      description: Get all entities funded by a specific funder.
+      tags:
+        - Relationships
+      parameters:
+        - name: funder_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: fiscal_year
+          in: query
+          schema:
+            type: integer
+        - name: min_amount
+          in: query
+          schema:
+            type: number
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: Funding recipients
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  recipients:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        entity:
+                          $ref: '../components/schemas/entities.yaml#/EntitySummary'
+                        amount:
+                          type: number
+                        fiscal_year:
+                          type: integer
+                  total_amount:
+                    type: number
+                  total_recipients:
+                    type: integer
+
+  /api/v1/relationships/funding-sources/{recipient_id}:
+    get:
+      operationId: getFundingSources
+      summary: Get funding sources
+      description: Get all entities that fund a specific recipient.
+      tags:
+        - Relationships
+      parameters:
+        - name: recipient_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: fiscal_year
+          in: query
+          schema:
+            type: integer
+        - name: min_amount
+          in: query
+          schema:
+            type: number
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: Funding sources
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  funders:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        entity:
+                          $ref: '../components/schemas/entities.yaml#/EntitySummary'
+                        amount:
+                          type: number
+                        fiscal_year:
+                          type: integer
+                  total_amount:
+                    type: number
+                  total_funders:
+                    type: integer
+
+  /api/v1/relationships/funding-clusters:
+    get:
+      operationId: getFundingClusters
+      summary: Get funding clusters
+      description: |
+        Find clusters of entities that share common funders.
+        Useful for detecting coordinated funding patterns.
+      tags:
+        - Relationships
+      parameters:
+        - name: min_shared_funders
+          in: query
+          schema:
+            type: integer
+            default: 2
+        - name: min_cluster_size
+          in: query
+          schema:
+            type: integer
+            default: 3
+        - name: entity_type
+          in: query
+          schema:
+            $ref: '../components/schemas/entities.yaml#/EntityType'
+        - name: fiscal_year
+          in: query
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: Funding clusters
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  clusters:
+                    type: array
+                    items:
+                      $ref: '../components/schemas/detection.yaml#/FundingCluster'
+
+  /api/v1/relationships/shared-funders:
+    get:
+      operationId: getSharedFunders
+      summary: Get shared funders
+      description: Find funders shared by a set of entities.
+      tags:
+        - Relationships
+      parameters:
+        - name: entity_ids
+          in: query
+          required: true
+          description: Comma-separated entity IDs
+          schema:
+            type: string
+        - name: min_recipients
+          in: query
+          schema:
+            type: integer
+            default: 2
+        - name: fiscal_year
+          in: query
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: Shared funders
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  shared_funders:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        funder:
+                          $ref: '../components/schemas/entities.yaml#/EntitySummary'
+                        recipients:
+                          type: array
+                          items:
+                            type: string
+                            format: uuid
+                        total_funding:
+                          type: number
+
+  /api/v1/relationships/shared-infrastructure:
+    get:
+      operationId: getSharedInfrastructure
+      summary: Get shared infrastructure
+      description: Find outlets/domains that share technical infrastructure.
+      tags:
+        - Relationships
+      parameters:
+        - name: outlet_ids
+          in: query
+          description: Comma-separated outlet/domain IDs
+          schema:
+            type: string
+        - name: domains
+          in: query
+          description: Comma-separated domain names
+          schema:
+            type: string
+        - name: min_score
+          in: query
+          schema:
+            type: number
+            default: 3.0
+      responses:
+        '200':
+          description: Infrastructure sharing matches
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  matches:
+                    type: array
+                    items:
+                      $ref: '../components/schemas/detection.yaml#/InfrastructureMatch'
+
+  /api/v1/relationships/shared-infrastructure/analyze:
+    post:
+      operationId: analyzeInfrastructure
+      summary: Analyze domain infrastructure
+      description: |
+        Analyze a domain's technical infrastructure including:
+        - Hosting provider and ASN
+        - DNS and nameservers
+        - Analytics IDs (Google Analytics, Facebook Pixel)
+        - CDN and SSL providers
+        - CMS platform
+      tags:
+        - Relationships
+      parameters:
+        - name: domain
+          in: query
+          required: true
+          description: Domain to analyze
+          schema:
+            type: string
+          example: "example.com"
+      responses:
+        '200':
+          description: Infrastructure profile
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/detection.yaml#/InfrastructureProfile'

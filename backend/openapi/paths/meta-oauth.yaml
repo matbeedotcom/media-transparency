@@ -1,0 +1,178 @@
+# Meta OAuth API paths
+# Meta (Facebook) OAuth authentication for Meta Ad Library API
+
+paths:
+  /api/v1/meta/auth/login:
+    get:
+      operationId: getMetaAuthUrl
+      summary: Get Meta OAuth URL
+      description: |
+        Get the URL to initiate Meta (Facebook) OAuth flow.
+        Redirect the user to this URL to authorize access to the Meta Ad Library API.
+      tags:
+        - Meta OAuth
+      security: []
+      responses:
+        '200':
+          description: OAuth URL
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - auth_url
+                  - state
+                properties:
+                  auth_url:
+                    type: string
+                    format: uri
+                    description: URL to redirect user to for authorization
+                  state:
+                    type: string
+                    description: State token for CSRF protection
+
+  /api/v1/meta/auth/callback:
+    get:
+      operationId: handleMetaCallback
+      summary: Handle OAuth callback
+      description: |
+        Callback endpoint for Meta OAuth flow.
+        Exchanges the authorization code for an access token.
+
+        This endpoint is called by Meta after user authorization.
+        It redirects to a configured success/error URL.
+      tags:
+        - Meta OAuth
+      security: []
+      parameters:
+        - name: code
+          in: query
+          description: Authorization code from Meta
+          schema:
+            type: string
+        - name: state
+          in: query
+          description: State token for CSRF verification
+          schema:
+            type: string
+        - name: error
+          in: query
+          description: Error code if authorization failed
+          schema:
+            type: string
+        - name: error_description
+          in: query
+          description: Human-readable error description
+          schema:
+            type: string
+      responses:
+        '302':
+          description: Redirect to success or error page
+          headers:
+            Location:
+              schema:
+                type: string
+                format: uri
+
+  /api/v1/meta/auth/status:
+    get:
+      operationId: getMetaAuthStatus
+      summary: Get Meta auth status
+      description: |
+        Check the current status of Meta OAuth authentication.
+        Returns connection status, expiration, and available scopes.
+      tags:
+        - Meta OAuth
+      responses:
+        '200':
+          description: Auth status
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - connected
+                properties:
+                  connected:
+                    type: boolean
+                    description: Whether Meta is currently connected
+                  fb_user_id:
+                    type: string
+                    description: Facebook user ID (if connected)
+                  fb_user_name:
+                    type: string
+                    description: Facebook user name (if connected)
+                  expires_at:
+                    type: string
+                    format: date-time
+                    description: Token expiration time
+                  days_until_expiry:
+                    type: integer
+                    description: Days until token expires
+                  expires_soon:
+                    type: boolean
+                    description: True if token expires within 7 days
+                  scopes:
+                    type: array
+                    items:
+                      type: string
+                    description: Authorized scopes
+
+  /api/v1/meta/auth/disconnect:
+    delete:
+      operationId: disconnectMeta
+      summary: Disconnect Meta
+      description: |
+        Disconnect Meta account and revoke access token.
+        This will disable Meta Ad Library ingestion.
+      tags:
+        - Meta OAuth
+      responses:
+        '200':
+          description: Disconnected
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - success
+                  - message
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+
+  /api/v1/meta/auth/refresh:
+    post:
+      operationId: refreshMetaToken
+      summary: Refresh Meta token
+      description: |
+        Attempt to refresh the Meta access token.
+        This extends the token's lifetime if it's close to expiring.
+
+        Note: Meta long-lived tokens can only be refreshed when they
+        have at least 24 hours of validity remaining.
+      tags:
+        - Meta OAuth
+      responses:
+        '200':
+          description: Token refresh result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  expires_at:
+                    type: string
+                    format: date-time
+        '400':
+          description: Cannot refresh token
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/common.yaml#/ErrorResponse'

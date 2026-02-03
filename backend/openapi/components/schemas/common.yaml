@@ -1,0 +1,216 @@
+# Common schemas
+# Shared schemas including pagination, errors, and evidence
+
+# Pagination
+PaginatedResponse:
+  type: object
+  required:
+    - results
+    - total
+    - limit
+    - offset
+  properties:
+    results:
+      type: array
+      items: {}
+    total:
+      type: integer
+      description: Total number of results
+    limit:
+      type: integer
+      description: Maximum results per page
+    offset:
+      type: integer
+      description: Results offset
+    has_more:
+      type: boolean
+      description: Whether more results are available
+
+PaginatedEntityResponse:
+  type: object
+  required:
+    - results
+    - total
+    - limit
+    - offset
+  properties:
+    results:
+      type: array
+      items:
+        $ref: 'entities.yaml#/EntityResponse'
+    total:
+      type: integer
+    limit:
+      type: integer
+    offset:
+      type: integer
+    has_more:
+      type: boolean
+
+CursorPaginatedResponse:
+  type: object
+  required:
+    - results
+    - has_more
+  properties:
+    results:
+      type: array
+      items: {}
+    next_cursor:
+      type: string
+      description: Cursor for next page
+    has_more:
+      type: boolean
+
+# Error responses
+ErrorResponse:
+  type: object
+  required:
+    - success
+    - error
+    - error_code
+  properties:
+    success:
+      type: boolean
+      enum: [false]
+    error:
+      type: string
+      description: Human-readable error message
+    error_code:
+      type: string
+      description: Machine-readable error code
+    details:
+      type: array
+      items:
+        $ref: '#/ErrorDetail'
+
+ErrorDetail:
+  type: object
+  properties:
+    code:
+      type: string
+    message:
+      type: string
+    field:
+      type: string
+      description: Field that caused the error
+
+# Evidence
+EvidenceType:
+  type: string
+  enum:
+    - IRS_990_FILING
+    - CRA_T3010
+    - OPENCORP_RECORD
+    - SEC_EDGAR_FILING
+    - SEDAR_FILING
+    - CANADA_CORP_RECORD
+    - META_AD
+    - WHOIS_RECORD
+    - DNS_LOOKUP
+    - PAGE_ANALYSIS
+    - MANUAL_RESEARCH
+  description: Type of evidence source
+
+EvidenceResponse:
+  type: object
+  required:
+    - id
+    - evidence_type
+    - retrieved_at
+  properties:
+    id:
+      type: string
+      format: uuid
+    evidence_type:
+      $ref: '#/EvidenceType'
+    source_url:
+      type: string
+      format: uri
+    source_archive_url:
+      type: string
+      format: uri
+      description: Archived copy of the source
+    retrieved_at:
+      type: string
+      format: date-time
+    extractor:
+      type: string
+      description: Name of extractor that processed this evidence
+    extractor_version:
+      type: string
+    extraction_confidence:
+      type: number
+      minimum: 0
+      maximum: 1
+    content_hash:
+      type: string
+      description: Hash of evidence content for deduplication
+
+EvidenceRef:
+  type: object
+  required:
+    - id
+    - evidence_type
+  properties:
+    id:
+      type: string
+      format: uuid
+    evidence_type:
+      $ref: '#/EvidenceType'
+    source_url:
+      type: string
+      format: uri
+    archive_url:
+      type: string
+      format: uri
+    retrieved_at:
+      type: string
+      format: date-time
+
+# API response wrapper
+APIResponse:
+  type: object
+  required:
+    - success
+  properties:
+    success:
+      type: boolean
+    data:
+      description: Response data (type varies by endpoint)
+    error:
+      type: string
+    error_code:
+      type: string
+    details:
+      type: array
+      items:
+        $ref: '#/ErrorDetail'
+
+# Date range
+DateRange:
+  type: object
+  properties:
+    start:
+      type: string
+      format: date-time
+    end:
+      type: string
+      format: date-time
+
+# Source reference
+SourceRef:
+  type: object
+  required:
+    - source
+    - identifier
+  properties:
+    source:
+      type: string
+      description: Source system identifier
+    identifier:
+      type: string
+      description: ID in the source system
+    evidence_id:
+      type: string
+      format: uuid

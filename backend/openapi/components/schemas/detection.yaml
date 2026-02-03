@@ -1,0 +1,428 @@
+# Detection schemas
+# Detection algorithm requests, responses, and findings
+
+SignalType:
+  type: string
+  enum:
+    - TEMPORAL_COORDINATION
+    - FUNDING_CLUSTER
+    - INFRASTRUCTURE_SHARING
+    - BOARD_INTERLOCK
+  description: Type of coordination signal
+
+SignalCategory:
+  type: string
+  enum:
+    - COORDINATION
+    - FUNDING
+    - INFRASTRUCTURE
+    - GOVERNANCE
+  description: Category of coordination signal
+
+# Temporal Analysis
+TemporalAnalysisRequest:
+  type: object
+  required:
+    - entity_ids
+  properties:
+    entity_ids:
+      type: array
+      items:
+        type: string
+        format: uuid
+      minItems: 2
+      description: Entities to analyze for coordination
+    start_date:
+      type: string
+      format: date-time
+      description: Start of analysis window
+    end_date:
+      type: string
+      format: date-time
+      description: End of analysis window
+    event_types:
+      type: array
+      items:
+        type: string
+      description: Event types to include in analysis
+    exclude_hard_negatives:
+      type: boolean
+      default: true
+      description: Whether to filter out known hard negatives
+    async_mode:
+      type: boolean
+      default: false
+      description: Run analysis asynchronously
+
+TemporalAnalysisResponse:
+  type: object
+  required:
+    - analysis_id
+    - status
+    - coordination_score
+    - confidence
+    - is_coordinated
+  properties:
+    analysis_id:
+      type: string
+      format: uuid
+    status:
+      type: string
+      enum: [completed, running, failed]
+    analyzed_at:
+      type: string
+      format: date-time
+    time_range_start:
+      type: string
+      format: date-time
+    time_range_end:
+      type: string
+      format: date-time
+    entity_count:
+      type: integer
+    event_count:
+      type: integer
+    coordination_score:
+      type: number
+      minimum: 0
+      maximum: 10
+    confidence:
+      type: number
+      minimum: 0
+      maximum: 1
+    is_coordinated:
+      type: boolean
+    explanation:
+      type: string
+    bursts:
+      type: array
+      items:
+        $ref: '#/BurstDetectionResult'
+    lead_lag_pairs:
+      type: array
+      items:
+        $ref: '#/LeadLagResult'
+    synchronized_groups:
+      type: array
+      items:
+        $ref: '#/SynchronizationResult'
+    hard_negatives_filtered:
+      type: integer
+
+BurstDetectionResult:
+  type: object
+  properties:
+    burst_id:
+      type: string
+    start_time:
+      type: string
+      format: date-time
+    end_time:
+      type: string
+      format: date-time
+    entities:
+      type: array
+      items:
+        type: string
+        format: uuid
+    event_count:
+      type: integer
+    intensity_score:
+      type: number
+
+LeadLagResult:
+  type: object
+  properties:
+    leader_entity_id:
+      type: string
+      format: uuid
+    follower_entity_id:
+      type: string
+      format: uuid
+    lag_seconds:
+      type: number
+    correlation_score:
+      type: number
+
+SynchronizationResult:
+  type: object
+  properties:
+    synchronized_group:
+      type: string
+    entities:
+      type: array
+      items:
+        type: string
+        format: uuid
+    time_window:
+      type: number
+      description: Synchronization window in seconds
+    synchronization_score:
+      type: number
+
+# Funding Cluster Analysis
+FundingClusterRequest:
+  type: object
+  properties:
+    entity_type:
+      $ref: 'entities.yaml#/EntityType'
+    fiscal_year:
+      type: integer
+    min_shared_funders:
+      type: integer
+      default: 2
+    limit:
+      type: integer
+      default: 20
+
+FundingClusterResponse:
+  type: object
+  properties:
+    clusters:
+      type: array
+      items:
+        $ref: '#/FundingCluster'
+    total_clusters:
+      type: integer
+    explanation:
+      type: string
+
+FundingCluster:
+  type: object
+  properties:
+    cluster_id:
+      type: string
+    shared_funder:
+      $ref: 'entities.yaml#/EntitySummary'
+    members:
+      type: array
+      items:
+        $ref: 'entities.yaml#/EntitySummary'
+    total_funding:
+      type: number
+    score:
+      type: number
+    confidence:
+      type: number
+    evidence_summary:
+      type: string
+
+# Infrastructure Sharing Analysis
+InfrastructureSharingRequest:
+  type: object
+  properties:
+    entity_ids:
+      type: array
+      items:
+        type: string
+        format: uuid
+    domains:
+      type: array
+      items:
+        type: string
+    min_score:
+      type: number
+      default: 3.0
+
+InfrastructureSharingResponse:
+  type: object
+  properties:
+    profiles:
+      type: array
+      items:
+        $ref: '#/InfrastructureProfile'
+    matches:
+      type: array
+      items:
+        $ref: '#/InfrastructureMatch'
+    total_matches:
+      type: integer
+    domains_scanned:
+      type: integer
+    errors:
+      type: array
+      items:
+        type: string
+    explanation:
+      type: string
+
+InfrastructureProfile:
+  type: object
+  properties:
+    domain:
+      type: string
+    hosting_provider:
+      type: string
+    cdn_provider:
+      type: string
+    dns_provider:
+      type: string
+    registrar:
+      type: string
+    google_analytics_ids:
+      type: array
+      items:
+        type: string
+    facebook_pixel_ids:
+      type: array
+      items:
+        type: string
+    cms_platform:
+      type: string
+    ssl_issuer:
+      type: string
+    ip_addresses:
+      type: array
+      items:
+        type: string
+    asn:
+      type: string
+
+InfrastructureMatch:
+  type: object
+  properties:
+    domain_a:
+      type: string
+    domain_b:
+      type: string
+    total_score:
+      type: number
+    confidence:
+      type: number
+    signals:
+      type: array
+      items:
+        type: object
+        properties:
+          type:
+            type: string
+          value:
+            type: string
+          weight:
+            type: number
+          description:
+            type: string
+
+# Composite Score
+CompositeScoreRequest:
+  type: object
+  required:
+    - entity_ids
+  properties:
+    entity_ids:
+      type: array
+      items:
+        type: string
+        format: uuid
+      minItems: 2
+    weights:
+      type: object
+      properties:
+        temporal:
+          type: number
+          default: 1.0
+        funding:
+          type: number
+          default: 1.0
+        infrastructure:
+          type: number
+          default: 1.0
+        board_interlock:
+          type: number
+          default: 1.0
+    include_temporal:
+      type: boolean
+      default: true
+    include_funding:
+      type: boolean
+      default: true
+    include_infrastructure:
+      type: boolean
+      default: true
+
+CompositeScoreResponse:
+  type: object
+  required:
+    - finding_id
+    - overall_score
+    - flagged
+  properties:
+    finding_id:
+      type: string
+      format: uuid
+    overall_score:
+      type: number
+      minimum: 0
+      maximum: 10
+    adjusted_score:
+      type: number
+      description: Score after hard negative adjustments
+    signal_breakdown:
+      type: object
+      additionalProperties:
+        type: number
+    category_breakdown:
+      type: object
+      additionalProperties:
+        type: number
+    flagged:
+      type: boolean
+    flag_reason:
+      type: string
+    confidence_band:
+      type: string
+      enum: [high, medium, low]
+    entities_analyzed:
+      type: integer
+    explanation:
+      type: string
+    validation_passed:
+      type: boolean
+    validation_messages:
+      type: array
+      items:
+        type: string
+
+# Finding Explanation
+FindingExplanation:
+  type: object
+  required:
+    - finding_id
+    - finding_type
+  properties:
+    finding_id:
+      type: string
+      format: uuid
+    finding_type:
+      $ref: '#/SignalType'
+    entity_ids:
+      type: array
+      items:
+        type: string
+        format: uuid
+    score:
+      type: number
+    confidence:
+      type: number
+    why_flagged:
+      type: string
+      description: Human-readable explanation of why this was flagged
+    evidence_summary:
+      type: array
+      items:
+        type: object
+        properties:
+          type:
+            type: string
+          description:
+            type: string
+          source_url:
+            type: string
+    hard_negatives_checked:
+      type: array
+      items:
+        type: string
+    recommendations:
+      type: array
+      items:
+        type: string

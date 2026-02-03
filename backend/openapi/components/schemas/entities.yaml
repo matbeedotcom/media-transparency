@@ -1,0 +1,250 @@
+# Entity schemas
+# Entity types, models, and related schemas
+
+EntityType:
+  type: string
+  enum:
+    - PERSON
+    - ORGANIZATION
+    - OUTLET
+    - DOMAIN
+    - PLATFORM_ACCOUNT
+    - SPONSOR
+    - VENDOR
+  description: Type of entity in the system
+
+OrgType:
+  type: string
+  enum:
+    - NONPROFIT
+    - CORPORATION
+    - FOUNDATION
+    - POLITICAL_ORG
+    - UNKNOWN
+  description: Type of organization
+
+OrgStatus:
+  type: string
+  enum:
+    - ACTIVE
+    - INACTIVE
+    - REVOKED
+    - UNKNOWN
+  description: Current status of an organization
+
+MediaType:
+  type: string
+  enum:
+    - DIGITAL
+    - PRINT
+    - BROADCAST
+    - PODCAST
+    - HYBRID
+  description: Type of media outlet
+
+VendorType:
+  type: string
+  enum:
+    - HOSTING
+    - CDN
+    - DNS
+    - REGISTRAR
+    - ANALYTICS
+    - ADVERTISING
+    - CMS
+    - EMAIL
+    - PAYMENT
+    - OTHER
+  description: Type of infrastructure vendor
+
+PlatformType:
+  type: string
+  enum:
+    - FACEBOOK
+    - TWITTER
+    - INSTAGRAM
+    - YOUTUBE
+    - TIKTOK
+    - LINKEDIN
+    - THREADS
+    - BLUESKY
+    - MASTODON
+    - TELEGRAM
+    - REDDIT
+    - OTHER
+  description: Social media platform type
+
+EntitySummary:
+  type: object
+  required:
+    - id
+    - entity_type
+    - name
+  properties:
+    id:
+      type: string
+      format: uuid
+    entity_type:
+      $ref: '#/EntityType'
+    name:
+      type: string
+
+EntityResponse:
+  type: object
+  required:
+    - id
+    - entity_type
+    - name
+    - confidence
+    - created_at
+  properties:
+    id:
+      type: string
+      format: uuid
+    entity_type:
+      $ref: '#/EntityType'
+    name:
+      type: string
+      description: Primary name of the entity
+    confidence:
+      type: number
+      minimum: 0
+      maximum: 1
+      description: Confidence score for entity data quality
+    created_at:
+      type: string
+      format: date-time
+    updated_at:
+      type: string
+      format: date-time
+    aliases:
+      type: array
+      items:
+        type: string
+      description: Alternative names for this entity
+    properties:
+      type: object
+      description: Entity-type specific properties
+      additionalProperties: true
+
+OrganizationProperties:
+  type: object
+  properties:
+    org_type:
+      $ref: '#/OrgType'
+    status:
+      $ref: '#/OrgStatus'
+    jurisdiction:
+      type: string
+      description: Jurisdiction code (e.g., 'US', 'CA', 'CA-ON')
+    ein:
+      type: string
+      description: US Employer Identification Number
+    bn:
+      type: string
+      description: Canadian Business Number
+    registration_id:
+      type: string
+    incorporation_date:
+      type: string
+      format: date
+    website:
+      type: string
+      format: uri
+    address:
+      $ref: '#/Address'
+
+PersonProperties:
+  type: object
+  properties:
+    location:
+      type: string
+    roles:
+      type: array
+      items:
+        $ref: '#/RoleAssignment'
+
+OutletProperties:
+  type: object
+  properties:
+    media_type:
+      $ref: '#/MediaType'
+    domains:
+      type: array
+      items:
+        type: string
+    editorial_focus:
+      type: string
+    owner_org_id:
+      type: string
+      format: uuid
+
+DomainProperties:
+  type: object
+  properties:
+    outlet_id:
+      type: string
+      format: uuid
+    registrar:
+      type: string
+    registration_date:
+      type: string
+      format: date
+    expiry_date:
+      type: string
+      format: date
+    nameservers:
+      type: array
+      items:
+        type: string
+    ip_addresses:
+      type: array
+      items:
+        type: string
+    hosting_provider:
+      type: string
+    cdn_provider:
+      type: string
+    google_analytics_ids:
+      type: array
+      items:
+        type: string
+    facebook_pixel_ids:
+      type: array
+      items:
+        type: string
+    cms_platform:
+      type: string
+
+Address:
+  type: object
+  properties:
+    street:
+      type: string
+    city:
+      type: string
+    state:
+      type: string
+    postal_code:
+      type: string
+    country:
+      type: string
+
+RoleAssignment:
+  type: object
+  properties:
+    organization_id:
+      type: string
+      format: uuid
+    title:
+      type: string
+    start_date:
+      type: string
+      format: date
+    end_date:
+      type: string
+      format: date
+    compensation:
+      type: number
+    hours_per_week:
+      type: number

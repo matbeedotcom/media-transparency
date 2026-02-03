@@ -1,0 +1,204 @@
+# Validation API paths
+# Data validation framework for testing detection algorithms
+
+paths:
+  /api/v1/validation/metrics:
+    get:
+      operationId: getValidationMetrics
+      summary: Get validation metrics
+      description: |
+        Get current validation metrics including:
+        - Recall (detection rate)
+        - Precision (accuracy of detections)
+        - F1 score
+        - False positive rate
+      tags:
+        - Validation
+      responses:
+        '200':
+          description: Validation metrics
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/validation.yaml#/MetricsResponse'
+
+  /api/v1/validation/metrics/history:
+    get:
+      operationId: getMetricsHistory
+      summary: Get metrics history
+      description: Get historical validation metrics over time.
+      tags:
+        - Validation
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 30
+      responses:
+        '200':
+          description: Metrics history
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  history:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        timestamp:
+                          type: string
+                          format: date-time
+                        metrics:
+                          $ref: '../components/schemas/validation.yaml#/MetricsResponse'
+
+  /api/v1/validation/dashboard:
+    get:
+      operationId: getValidationDashboard
+      summary: Get validation dashboard
+      description: |
+        Get comprehensive validation dashboard data including:
+        - Summary metrics
+        - Performance by case type
+        - Signal performance breakdown
+        - Recent failures
+        - Health checks
+      tags:
+        - Validation
+      responses:
+        '200':
+          description: Dashboard data
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/validation.yaml#/DashboardResponse'
+
+  /api/v1/validation/run:
+    post:
+      operationId: runValidation
+      summary: Run validation
+      description: |
+        Run validation against a golden dataset or synthetic test cases.
+        Returns a job ID for tracking progress.
+      tags:
+        - Validation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '../components/schemas/validation.yaml#/ValidationRunRequest'
+      responses:
+        '202':
+          description: Validation started
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/validation.yaml#/ValidationRunResponse'
+
+  /api/v1/validation/jobs/{job_id}:
+    get:
+      operationId: getValidationJob
+      summary: Get validation job
+      description: Get status and results of a validation run.
+      tags:
+        - Validation
+      parameters:
+        - $ref: '../components/parameters.yaml#/JobIdParam'
+      responses:
+        '200':
+          description: Validation job details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                  progress:
+                    type: number
+                  results:
+                    $ref: '../components/schemas/validation.yaml#/MetricsResponse'
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+
+  /api/v1/validation/datasets:
+    get:
+      operationId: listGoldenDatasets
+      summary: List golden datasets
+      description: Get available golden datasets for validation.
+      tags:
+        - Validation
+      responses:
+        '200':
+          description: List of datasets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    name:
+                      type: string
+                    description:
+                      type: string
+                    case_count:
+                      type: integer
+                    case_types:
+                      type: array
+                      items:
+                        type: string
+
+  /api/v1/validation/datasets/{dataset_id}:
+    get:
+      operationId: getGoldenDataset
+      summary: Get golden dataset
+      description: Get details of a specific golden dataset.
+      tags:
+        - Validation
+      parameters:
+        - name: dataset_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Dataset details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
+                  description:
+                    type: string
+                  cases:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        case_type:
+                          type: string
+                        label:
+                          type: string
+                          enum: [positive, negative]
+                        entity_ids:
+                          type: array
+                          items:
+                            type: string
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'

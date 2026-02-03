@@ -1,0 +1,132 @@
+# Settings schemas
+# System settings and configuration
+
+ConnectionStatus:
+  type: string
+  enum:
+    - CONNECTED
+    - DISCONNECTED
+    - ERROR
+  description: Status of a service connection
+
+ConnectionInfo:
+  type: object
+  required:
+    - name
+    - status
+  properties:
+    name:
+      type: string
+      description: Connection name
+    type:
+      type: string
+      description: Connection type (postgres, neo4j, redis, etc.)
+    status:
+      $ref: '#/ConnectionStatus'
+    host:
+      type: string
+    port:
+      type: integer
+    latency_ms:
+      type: number
+      description: Connection latency in milliseconds
+    last_checked:
+      type: string
+      format: date-time
+    error:
+      type: string
+      description: Error message if status is ERROR
+
+DataSourceInfo:
+  type: object
+  required:
+    - id
+    - name
+    - enabled
+  properties:
+    id:
+      type: string
+    name:
+      type: string
+    description:
+      type: string
+    enabled:
+      type: boolean
+    requires_api_key:
+      type: boolean
+    has_api_key:
+      type: boolean
+      description: Whether API key is configured
+    api_key_env_var:
+      type: string
+      description: Environment variable name for API key
+    feature_flag:
+      type: string
+      description: Feature flag controlling this source
+    last_successful_run:
+      type: string
+      format: date-time
+    records_total:
+      type: integer
+      description: Total records from this source
+    status:
+      type: string
+      enum: [active, inactive, error]
+
+APIConfigInfo:
+  type: object
+  properties:
+    version:
+      type: string
+    environment:
+      type: string
+      enum: [development, staging, production]
+    debug_mode:
+      type: boolean
+    rate_limit_default:
+      type: integer
+    rate_limit_search:
+      type: integer
+    rate_limit_detection:
+      type: integer
+
+SettingsResponse:
+  type: object
+  properties:
+    api:
+      $ref: '#/APIConfigInfo'
+    connections:
+      type: object
+      additionalProperties:
+        $ref: '#/ConnectionInfo'
+    data_sources:
+      type: object
+      additionalProperties:
+        $ref: '#/DataSourceInfo'
+
+ConnectionsResponse:
+  type: object
+  required:
+    - connections
+    - all_healthy
+  properties:
+    connections:
+      type: array
+      items:
+        $ref: '#/ConnectionInfo'
+    all_healthy:
+      type: boolean
+
+DataSourcesResponse:
+  type: object
+  required:
+    - sources
+  properties:
+    sources:
+      type: array
+      items:
+        $ref: '#/DataSourceInfo'
+    total_enabled:
+      type: integer
+    total_disabled:
+      type: integer

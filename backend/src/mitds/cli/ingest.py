@@ -55,12 +55,39 @@ def cli():
     is_flag=True,
     help="Enable verbose output",
 )
+@click.option(
+    "--batched/--no-batch",
+    default=True,
+    help="Use batched processing for better performance (default: batched)",
+)
+@click.option(
+    "--batch-size",
+    type=int,
+    default=100,
+    help="Number of records per batch when using --batched (default: 100)",
+)
+@click.option(
+    "--skip",
+    type=int,
+    default=0,
+    help="Skip first N records (for resuming from a specific point)",
+)
+@click.option(
+    "--workers",
+    type=int,
+    default=None,
+    help="Number of parallel XML parsing workers (default: auto based on CPU count, max 8)",
+)
 def ingest_irs990(
     start_year: int | None,
     end_year: int | None,
     incremental: bool,
     limit: int | None,
     verbose: bool,
+    batched: bool,
+    batch_size: int,
+    skip: int,
+    workers: int | None,
 ):
     """Ingest IRS 990 nonprofit filings.
 
@@ -69,7 +96,7 @@ def ingest_irs990(
 
     Examples:
 
-        # Incremental sync for current and previous year
+        # Incremental sync for current and previous year (batched by default)
         mitds ingest irs990
 
         # Full sync for specific years
@@ -77,17 +104,42 @@ def ingest_irs990(
 
         # Test with limited records
         mitds ingest irs990 --limit 100 --verbose
+
+        # Use sequential processing (slower, for debugging)
+        mitds ingest irs990 --no-batch --limit 100
+
+        # Customize batch size for batched processing
+        mitds ingest irs990 --batch-size 200
+
+        # Resume from record 11000 (skip first 11000 records)
+        mitds ingest irs990 --skip 11000
+
+        # Resume and limit (process records 11000-12000)
+        mitds ingest irs990 --skip 11000 --limit 1000
     """
     from ..ingestion import run_irs990_ingestion
 
-    click.echo("Starting IRS 990 ingestion...")
+    mode_str = "batched" if batched else "sequential"
+    click.echo(f"Starting IRS 990 ingestion ({mode_str} mode)...")
+
+    import os
+    actual_workers = workers or min(os.cpu_count() or 4, 8)
 
     if verbose:
         click.echo(f"  Start year: {start_year or 'previous year'}")
         click.echo(f"  End year: {end_year or 'current year'}")
         click.echo(f"  Mode: {'incremental' if incremental else 'full'}")
+        click.echo(f"  Processing: {mode_str}")
+        if batched:
+            click.echo(f"  Batch size: {batch_size}")
+        click.echo(f"  Parse workers: {actual_workers}")
+        if skip:
+            click.echo(f"  Skip: {skip} records")
         if limit:
             click.echo(f"  Limit: {limit} records")
+
+    if skip:
+        click.echo(f"Skipping first {skip} records...")
 
     start_time = datetime.now()
 
@@ -98,6 +150,10 @@ def ingest_irs990(
                 end_year=end_year,
                 incremental=incremental,
                 limit=limit,
+                batched=batched,
+                batch_size=batch_size,
+                skip=skip,
+                workers=workers,
             )
         )
 

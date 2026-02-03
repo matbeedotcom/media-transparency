@@ -1,0 +1,161 @@
+# Relationship schemas
+# Relationship types, models, and graph traversal results
+
+RelationType:
+  type: string
+  enum:
+    - FUNDED_BY
+    - DIRECTOR_OF
+    - EMPLOYED_BY
+    - SPONSORED_BY
+    - OWNS
+    - CITED
+    - AMPLIFIED
+    - SHARED_INFRA
+  description: Type of relationship between entities
+
+RelationshipResponse:
+  type: object
+  required:
+    - id
+    - rel_type
+    - source_entity
+    - target_entity
+    - confidence
+  properties:
+    id:
+      type: string
+      format: uuid
+    rel_type:
+      $ref: '#/RelationType'
+    source_entity:
+      $ref: 'entities.yaml#/EntitySummary'
+    target_entity:
+      $ref: 'entities.yaml#/EntitySummary'
+    confidence:
+      type: number
+      minimum: 0
+      maximum: 1
+    valid_from:
+      type: string
+      format: date-time
+    valid_to:
+      type: string
+      format: date-time
+    properties:
+      type: object
+      additionalProperties: true
+
+FundedByProperties:
+  type: object
+  properties:
+    amount:
+      type: number
+      description: Funding amount
+    amount_currency:
+      type: string
+      default: USD
+    fiscal_year:
+      type: integer
+    grant_purpose:
+      type: string
+
+DirectorOfProperties:
+  type: object
+  properties:
+    title:
+      type: string
+    compensation:
+      type: number
+    hours_per_week:
+      type: number
+
+OwnsProperties:
+  type: object
+  properties:
+    ownership_percentage:
+      type: number
+      minimum: 0
+      maximum: 100
+    ownership_type:
+      type: string
+
+PathResult:
+  type: object
+  required:
+    - path_found
+  properties:
+    path_found:
+      type: boolean
+    source:
+      $ref: 'entities.yaml#/EntitySummary'
+    target:
+      $ref: 'entities.yaml#/EntitySummary'
+    hops:
+      type: integer
+      description: Number of relationships in the path
+    path_nodes:
+      type: array
+      items:
+        $ref: 'entities.yaml#/EntitySummary'
+    path_edges:
+      type: array
+      items:
+        $ref: '#/RelationshipResponse'
+
+FundingPath:
+  type: object
+  required:
+    - path_nodes
+    - path_edges
+  properties:
+    path_nodes:
+      type: array
+      items:
+        $ref: 'entities.yaml#/EntitySummary'
+    path_edges:
+      type: array
+      items:
+        $ref: '#/RelationshipResponse'
+    total_amount:
+      type: number
+      description: Total funding amount along the path
+    confidence:
+      type: number
+      minimum: 0
+      maximum: 1
+
+RelationshipCreate:
+  type: object
+  required:
+    - rel_type
+    - source_entity_id
+    - target_entity_id
+  properties:
+    rel_type:
+      $ref: '#/RelationType'
+    source_entity_id:
+      type: string
+      format: uuid
+    target_entity_id:
+      type: string
+      format: uuid
+    valid_from:
+      type: string
+      format: date-time
+    valid_to:
+      type: string
+      format: date-time
+    confidence:
+      type: number
+      minimum: 0
+      maximum: 1
+      default: 0.8
+    properties:
+      type: object
+      additionalProperties: true
+    evidence_refs:
+      type: array
+      items:
+        type: string
+        format: uuid

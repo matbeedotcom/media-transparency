@@ -1,0 +1,150 @@
+# Reports API paths
+# Report generation and export
+
+paths:
+  /api/v1/reports/templates:
+    get:
+      operationId: listReportTemplates
+      summary: List report templates
+      description: Get available report templates with their configuration options.
+      tags:
+        - Reports
+      responses:
+        '200':
+          description: List of templates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '../components/schemas/reports.yaml#/TemplateResponse'
+
+  /api/v1/reports/templates/{template_id}:
+    get:
+      operationId: getReportTemplate
+      summary: Get report template details
+      description: Get detailed information about a specific template.
+      tags:
+        - Reports
+      parameters:
+        - name: template_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Template details
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/reports.yaml#/TemplateResponse'
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+
+  /api/v1/reports:
+    post:
+      operationId: generateReport
+      summary: Generate report
+      description: |
+        Generate a new report for specified entities.
+        Reports are generated asynchronously for large datasets.
+
+        Available report types:
+        - `structural_risk`: Analyze structural risks and coordination patterns
+        - `topology_summary`: Summarize the topology of entity relationships
+        - `timeline_narrative`: Generate a narrative timeline of events
+      tags:
+        - Reports
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '../components/schemas/reports.yaml#/ReportRequest'
+      responses:
+        '202':
+          description: Report generation started
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/reports.yaml#/ReportResponse'
+
+  /api/v1/reports/{report_id}:
+    get:
+      operationId: getReport
+      summary: Get report
+      description: |
+        Retrieve a generated report in the specified format.
+        Supports multiple output formats.
+      tags:
+        - Reports
+      parameters:
+        - name: report_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: format
+          in: query
+          description: Output format
+          schema:
+            type: string
+            enum: [json, html, pdf, markdown]
+            default: json
+      responses:
+        '200':
+          description: Report content
+          content:
+            application/json:
+              schema:
+                type: object
+            text/html:
+              schema:
+                type: string
+            text/markdown:
+              schema:
+                type: string
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+
+  /api/v1/reports/{report_id}/status:
+    get:
+      operationId: getReportStatus
+      summary: Get report generation status
+      tags:
+        - Reports
+      parameters:
+        - name: report_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Report status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  report_id:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    enum: [pending, generating, completed, failed]
+                  progress:
+                    type: number
+                    minimum: 0
+                    maximum: 100
+                  error:
+                    type: string
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'

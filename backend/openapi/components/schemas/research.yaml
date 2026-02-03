@@ -1,0 +1,380 @@
+# Research schemas
+# Research session management and entity discovery
+
+EntryPointType:
+  type: string
+  enum:
+    - META_ADS
+    - COMPANY
+    - EIN
+    - BN
+    - NONPROFIT
+    - ENTITY_ID
+  description: Type of entry point for research session
+
+SessionStatus:
+  type: string
+  enum:
+    - INITIALIZING
+    - RUNNING
+    - PAUSED
+    - COMPLETED
+    - FAILED
+  description: Current status of research session
+
+LeadType:
+  type: string
+  enum:
+    - OWNERSHIP
+    - FUNDING
+    - SPONSORSHIP
+    - BOARD_INTERLOCK
+    - CROSS_BORDER
+    - INFRASTRUCTURE
+  description: Type of research lead
+
+LeadStatus:
+  type: string
+  enum:
+    - PENDING
+    - IN_PROGRESS
+    - COMPLETED
+    - SKIPPED
+    - FAILED
+  description: Status of a lead
+
+IdentifierType:
+  type: string
+  enum:
+    - NAME
+    - EIN
+    - BN
+    - CIK
+    - SEDAR_PROFILE
+    - META_PAGE_ID
+    - OPENCORP_ID
+    - LITTLESIS_ID
+    - ENTITY_ID
+  description: Type of entity identifier
+
+# Session configuration
+ResearchSessionConfig:
+  type: object
+  properties:
+    max_depth:
+      type: integer
+      default: 3
+      description: Maximum exploration depth
+    max_entities:
+      type: integer
+      default: 100
+      description: Maximum entities to discover
+    max_relationships:
+      type: integer
+      default: 500
+    enabled_lead_types:
+      type: array
+      items:
+        $ref: '#/LeadType'
+      description: Lead types to pursue (empty = all)
+    min_confidence:
+      type: number
+      default: 0.5
+    min_funding_amount:
+      type: number
+      description: Minimum funding amount to follow
+    jurisdictions:
+      type: array
+      items:
+        type: string
+      description: Jurisdictions to include
+    enabled_sources:
+      type: array
+      items:
+        type: string
+      description: Data sources to query
+    ownership_priority_boost:
+      type: number
+      default: 1.0
+    funding_priority_boost:
+      type: number
+      default: 1.0
+    max_api_calls_per_minute:
+      type: integer
+      default: 60
+    pause_on_high_value_entity:
+      type: boolean
+      default: false
+    high_value_threshold:
+      type: number
+      default: 0.9
+
+# Session stats
+SessionStats:
+  type: object
+  properties:
+    total_entities:
+      type: integer
+    total_relationships:
+      type: integer
+    entities_by_type:
+      type: object
+      additionalProperties:
+        type: integer
+    relationships_by_type:
+      type: object
+      additionalProperties:
+        type: integer
+    entities_by_depth:
+      type: object
+      additionalProperties:
+        type: integer
+    leads_total:
+      type: integer
+    leads_pending:
+      type: integer
+    leads_completed:
+      type: integer
+    leads_skipped:
+      type: integer
+    leads_failed:
+      type: integer
+    sources_queried:
+      type: object
+      additionalProperties:
+        type: integer
+    api_calls_made:
+      type: integer
+    processing_time_seconds:
+      type: number
+    estimated_remaining_seconds:
+      type: number
+    high_value_entities:
+      type: integer
+    cross_border_connections:
+      type: integer
+    board_interlocks_found:
+      type: integer
+
+# Session requests/responses
+CreateSessionRequest:
+  type: object
+  required:
+    - name
+    - entry_point_type
+    - entry_point_value
+  properties:
+    name:
+      type: string
+      description: Session name
+    description:
+      type: string
+    entry_point_type:
+      $ref: '#/EntryPointType'
+    entry_point_value:
+      type: string
+      description: Entry point value
+    config:
+      $ref: '#/ResearchSessionConfig'
+
+SessionResponse:
+  type: object
+  required:
+    - id
+    - name
+    - entry_point_type
+    - entry_point_value
+    - status
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+    description:
+      type: string
+    entry_point_type:
+      $ref: '#/EntryPointType'
+    entry_point_value:
+      type: string
+    status:
+      $ref: '#/SessionStatus'
+    stats:
+      $ref: '#/SessionStats'
+    created_at:
+      type: string
+      format: date-time
+    updated_at:
+      type: string
+      format: date-time
+    started_at:
+      type: string
+      format: date-time
+    completed_at:
+      type: string
+      format: date-time
+
+SessionListResponse:
+  type: object
+  required:
+    - sessions
+    - total
+  properties:
+    sessions:
+      type: array
+      items:
+        $ref: '#/SessionResponse'
+    total:
+      type: integer
+
+# Entity discovery
+EntitySummaryResponse:
+  type: object
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+    entity_type:
+      $ref: 'entities.yaml#/EntityType'
+    depth:
+      type: integer
+      description: Discovery depth from entry point
+    relevance_score:
+      type: number
+    discovered_via:
+      type: string
+      description: How this entity was discovered
+
+EntitiesListResponse:
+  type: object
+  required:
+    - entities
+    - total
+  properties:
+    entities:
+      type: array
+      items:
+        $ref: '#/EntitySummaryResponse'
+    total:
+      type: integer
+
+# Leads
+LeadSummary:
+  type: object
+  properties:
+    id:
+      type: string
+      format: uuid
+    lead_type:
+      $ref: '#/LeadType'
+    target_identifier:
+      type: string
+    target_identifier_type:
+      $ref: '#/IdentifierType'
+    priority:
+      type: integer
+    confidence:
+      type: number
+    depth:
+      type: integer
+    status:
+      $ref: '#/LeadStatus'
+    created_at:
+      type: string
+      format: date-time
+    processed_at:
+      type: string
+      format: date-time
+
+QueueStats:
+  type: object
+  properties:
+    total:
+      type: integer
+    pending:
+      type: integer
+    in_progress:
+      type: integer
+    completed:
+      type: integer
+    skipped:
+      type: integer
+    failed:
+      type: integer
+    by_type:
+      type: object
+      additionalProperties:
+        type: integer
+    by_priority:
+      type: object
+      additionalProperties:
+        type: integer
+    average_confidence:
+      type: number
+
+LeadsListResponse:
+  type: object
+  required:
+    - leads
+    - total
+  properties:
+    leads:
+      type: array
+      items:
+        $ref: '#/LeadSummary'
+    total:
+      type: integer
+    stats:
+      $ref: '#/QueueStats'
+
+# Graph visualization
+GraphNode:
+  type: object
+  required:
+    - id
+    - label
+    - type
+  properties:
+    id:
+      type: string
+    label:
+      type: string
+    type:
+      type: string
+    properties:
+      type: object
+      additionalProperties: true
+
+GraphEdge:
+  type: object
+  required:
+    - source
+    - target
+    - type
+  properties:
+    source:
+      type: string
+    target:
+      type: string
+    type:
+      type: string
+    properties:
+      type: object
+      additionalProperties: true
+
+SessionGraph:
+  type: object
+  required:
+    - nodes
+    - edges
+  properties:
+    nodes:
+      type: array
+      items:
+        $ref: '#/GraphNode'
+    edges:
+      type: array
+      items:
+        $ref: '#/GraphEdge'

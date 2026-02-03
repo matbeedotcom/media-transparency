@@ -1,0 +1,152 @@
+# Detection API paths
+# Detection algorithms for coordination patterns and influence campaigns
+
+paths:
+  /api/v1/detection/temporal-coordination:
+    post:
+      operationId: analyzeTemporalCoordination
+      summary: Analyze temporal coordination
+      description: |
+        Detect temporal coordination patterns between entities by analyzing:
+        - Synchronized publishing or activity bursts
+        - Lead-lag relationships (one entity consistently acts before another)
+        - Coordinated timing of events
+
+        Supports async mode for large analyses.
+      tags:
+        - Detection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '../components/schemas/detection.yaml#/TemporalAnalysisRequest'
+      responses:
+        '200':
+          description: Analysis results (sync mode) or job info (async mode)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '../components/schemas/detection.yaml#/TemporalAnalysisResponse'
+                  - type: object
+                    properties:
+                      job_id:
+                        type: string
+                        format: uuid
+                      status_url:
+                        type: string
+        '400':
+          $ref: '../components/responses.yaml#/BadRequest'
+
+  /api/v1/detection/funding-clusters:
+    post:
+      operationId: detectFundingClusters
+      summary: Detect funding clusters
+      description: |
+        Identify clusters of entities that share common funders,
+        which may indicate coordinated influence networks.
+
+        Returns clusters sorted by score (higher = more coordination signals).
+      tags:
+        - Detection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '../components/schemas/detection.yaml#/FundingClusterRequest'
+      responses:
+        '200':
+          description: Funding cluster analysis
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/detection.yaml#/FundingClusterResponse'
+
+  /api/v1/detection/infrastructure-sharing:
+    post:
+      operationId: detectInfrastructureSharing
+      summary: Detect infrastructure sharing
+      description: |
+        Analyze domains/outlets for shared technical infrastructure including:
+        - Same Google Analytics or Facebook Pixel IDs
+        - Shared hosting providers or CDNs
+        - Common nameservers or DNS patterns
+        - Same SSL certificates
+
+        High scores indicate likely common ownership or coordination.
+      tags:
+        - Detection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '../components/schemas/detection.yaml#/InfrastructureSharingRequest'
+      responses:
+        '200':
+          description: Infrastructure sharing analysis
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/detection.yaml#/InfrastructureSharingResponse'
+
+  /api/v1/detection/composite-score:
+    post:
+      operationId: calculateCompositeScore
+      summary: Calculate composite coordination score
+      description: |
+        Calculate an overall coordination score combining multiple signals:
+        - Temporal coordination (publishing patterns)
+        - Funding clusters (shared funders)
+        - Infrastructure sharing (shared tech)
+        - Board interlocks (shared directors)
+
+        Applies hard negative filtering to reduce false positives
+        (e.g., entities in the same trade association).
+      tags:
+        - Detection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '../components/schemas/detection.yaml#/CompositeScoreRequest'
+      responses:
+        '200':
+          description: Composite score result
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/detection.yaml#/CompositeScoreResponse'
+
+  /api/v1/detection/explain/{finding_id}:
+    get:
+      operationId: explainFinding
+      summary: Explain detection finding
+      description: |
+        Get a human-readable explanation of a detection finding including:
+        - Why the finding was flagged
+        - Evidence supporting the finding
+        - Hard negatives that were checked
+        - Recommendations for further investigation
+      tags:
+        - Detection
+      parameters:
+        - name: finding_id
+          in: path
+          required: true
+          description: Finding ID from a detection result
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Finding explanation
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/detection.yaml#/FindingExplanation'
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'

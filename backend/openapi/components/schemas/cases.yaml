@@ -1,0 +1,523 @@
+# Case schemas
+# Case management, evidence, matches, and reports
+
+EntryPointType:
+  type: string
+  enum:
+    - META_AD
+    - CORPORATION
+    - URL
+    - TEXT
+  description: Type of entry point for case creation
+
+CaseStatus:
+  type: string
+  enum:
+    - INITIALIZING
+    - PROCESSING
+    - PAUSED
+    - COMPLETED
+    - FAILED
+  description: Current status of a case
+
+MatchStatus:
+  type: string
+  enum:
+    - PENDING
+    - APPROVED
+    - REJECTED
+    - DEFERRED
+  description: Status of an entity match
+
+ExtractionMethod:
+  type: string
+  enum:
+    - DETERMINISTIC
+    - LLM
+    - HYBRID
+  description: Method used to extract entities
+
+# Case configuration
+CaseConfig:
+  type: object
+  properties:
+    max_depth:
+      type: integer
+      default: 3
+      description: Maximum relationship depth to explore
+    max_entities:
+      type: integer
+      default: 100
+      description: Maximum entities to discover
+    max_relationships:
+      type: integer
+      default: 500
+    jurisdictions:
+      type: array
+      items:
+        type: string
+      description: Jurisdictions to include (empty = all)
+    min_confidence:
+      type: number
+      default: 0.5
+      description: Minimum confidence for auto-linking
+    auto_merge_threshold:
+      type: number
+      default: 0.9
+      description: Threshold for automatic entity merging
+    review_threshold:
+      type: number
+      default: 0.7
+      description: Threshold below which matches need review
+    enable_llm_extraction:
+      type: boolean
+      default: true
+      description: Use LLM for entity extraction
+
+# Case stats
+CaseStats:
+  type: object
+  properties:
+    entity_count:
+      type: integer
+    relationship_count:
+      type: integer
+    evidence_count:
+      type: integer
+    pending_matches:
+      type: integer
+    leads_processed:
+      type: integer
+    leads_pending:
+      type: integer
+
+# Case requests/responses
+CreateCaseRequest:
+  type: object
+  required:
+    - name
+    - entry_point_type
+    - entry_point_value
+  properties:
+    name:
+      type: string
+      description: Human-readable case name
+    description:
+      type: string
+    entry_point_type:
+      $ref: '#/EntryPointType'
+    entry_point_value:
+      type: string
+      description: Entry point value (ad ID, company name, URL, or text)
+    config:
+      $ref: '#/CaseConfig'
+
+CaseResponse:
+  type: object
+  required:
+    - id
+    - name
+    - entry_point_type
+    - entry_point_value
+    - status
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+    description:
+      type: string
+    entry_point_type:
+      $ref: '#/EntryPointType'
+    entry_point_value:
+      type: string
+    status:
+      $ref: '#/CaseStatus'
+    config:
+      $ref: '#/CaseConfig'
+    stats:
+      $ref: '#/CaseStats'
+    research_session_id:
+      type: string
+      format: uuid
+    created_at:
+      type: string
+      format: date-time
+    updated_at:
+      type: string
+      format: date-time
+    completed_at:
+      type: string
+      format: date-time
+
+CaseListResponse:
+  type: object
+  required:
+    - items
+    - total
+  properties:
+    items:
+      type: array
+      items:
+        $ref: '#/CaseResponse'
+    total:
+      type: integer
+
+# Processing details
+ProcessingDetails:
+  type: object
+  properties:
+    is_processing:
+      type: boolean
+    current_phase:
+      type: string
+    progress_percent:
+      type: number
+    leads_total:
+      type: integer
+    leads_pending:
+      type: integer
+    leads_completed:
+      type: integer
+    leads_failed:
+      type: integer
+    leads_skipped:
+      type: integer
+    recent_entities:
+      type: array
+      items:
+        $ref: 'entities.yaml#/EntitySummary'
+    recent_leads:
+      type: array
+      items:
+        type: object
+        properties:
+          id:
+            type: string
+          type:
+            type: string
+          target:
+            type: string
+          status:
+            type: string
+    started_at:
+      type: string
+      format: date-time
+    elapsed_seconds:
+      type: number
+
+# Entity matches
+MatchSignals:
+  type: object
+  properties:
+    name_similarity:
+      type: number
+    identifier_match:
+      type: boolean
+    jurisdiction_match:
+      type: boolean
+    address_overlap:
+      type: number
+    shared_directors:
+      type: integer
+
+EntityMatchResponse:
+  type: object
+  required:
+    - id
+    - source_entity
+    - target_entity
+    - confidence
+    - status
+  properties:
+    id:
+      type: string
+      format: uuid
+    source_entity:
+      $ref: 'entities.yaml#/EntitySummary'
+    target_entity:
+      $ref: 'entities.yaml#/EntitySummary'
+    confidence:
+      type: number
+    match_signals:
+      $ref: '#/MatchSignals'
+    status:
+      $ref: '#/MatchStatus'
+    reviewed_by:
+      type: string
+    reviewed_at:
+      type: string
+      format: date-time
+    review_notes:
+      type: string
+
+MatchListResponse:
+  type: object
+  required:
+    - items
+    - pending_count
+  properties:
+    items:
+      type: array
+      items:
+        $ref: '#/EntityMatchResponse'
+    pending_count:
+      type: integer
+
+# Case report
+CaseReport:
+  type: object
+  required:
+    - id
+    - case_id
+    - generated_at
+  properties:
+    id:
+      type: string
+      format: uuid
+    case_id:
+      type: string
+      format: uuid
+    generated_at:
+      type: string
+      format: date-time
+    report_version:
+      type: string
+    summary:
+      $ref: '#/ReportSummary'
+    top_entities:
+      type: array
+      items:
+        $ref: '#/RankedEntity'
+    top_relationships:
+      type: array
+      items:
+        $ref: '#/RankedRelationship'
+    cross_border_flags:
+      type: array
+      items:
+        $ref: '#/CrossBorderFlag'
+    unknowns:
+      type: array
+      items:
+        $ref: '#/Unknown'
+    evidence_index:
+      type: array
+      items:
+        $ref: '#/EvidenceCitation'
+    ads_summary:
+      $ref: '#/AdsSummary'
+    similarity_leads:
+      type: array
+      items:
+        $ref: '#/SimilarityLead'
+
+ReportSummary:
+  type: object
+  properties:
+    entry_point:
+      type: string
+    processing_time_seconds:
+      type: number
+    entity_count:
+      type: integer
+    relationship_count:
+      type: integer
+    cross_border_count:
+      type: integer
+    has_unresolved_matches:
+      type: boolean
+
+RankedEntity:
+  type: object
+  properties:
+    entity_id:
+      type: string
+      format: uuid
+    name:
+      type: string
+    entity_type:
+      $ref: 'entities.yaml#/EntityType'
+    relevance_score:
+      type: number
+    depth:
+      type: integer
+    key_relationships:
+      type: array
+      items:
+        type: string
+    jurisdiction:
+      type: string
+
+RankedRelationship:
+  type: object
+  properties:
+    source_entity_id:
+      type: string
+      format: uuid
+    source_name:
+      type: string
+    target_entity_id:
+      type: string
+      format: uuid
+    target_name:
+      type: string
+    relationship_type:
+      $ref: 'relationships.yaml#/RelationType'
+    significance_score:
+      type: number
+    amount:
+      type: number
+    evidence_ids:
+      type: array
+      items:
+        type: string
+        format: uuid
+    ad_metadata:
+      $ref: '#/AdMetadata'
+
+CrossBorderFlag:
+  type: object
+  properties:
+    us_entity_id:
+      type: string
+      format: uuid
+    us_entity_name:
+      type: string
+    ca_entity_id:
+      type: string
+      format: uuid
+    ca_entity_name:
+      type: string
+    relationship_type:
+      $ref: 'relationships.yaml#/RelationType'
+    amount:
+      type: number
+    evidence_ids:
+      type: array
+      items:
+        type: string
+        format: uuid
+
+Unknown:
+  type: object
+  properties:
+    entity_name:
+      type: string
+    reason:
+      type: string
+    attempted_sources:
+      type: array
+      items:
+        type: string
+
+EvidenceCitation:
+  type: object
+  properties:
+    evidence_id:
+      type: string
+      format: uuid
+    source_type:
+      $ref: 'common.yaml#/EvidenceType'
+    source_url:
+      type: string
+      format: uri
+    retrieved_at:
+      type: string
+      format: date-time
+
+AdMetadata:
+  type: object
+  properties:
+    ad_id:
+      type: string
+    creative_body:
+      type: string
+    creative_title:
+      type: string
+    ad_snapshot_url:
+      type: string
+      format: uri
+    impressions_lower:
+      type: integer
+    impressions_upper:
+      type: integer
+    spend_lower:
+      type: number
+    spend_upper:
+      type: number
+    currency:
+      type: string
+    delivery_start:
+      type: string
+      format: date
+    delivery_stop:
+      type: string
+      format: date
+    publisher_platforms:
+      type: array
+      items:
+        type: string
+    target_regions:
+      type: array
+      items:
+        type: string
+
+AdsSummary:
+  type: object
+  properties:
+    total_ads:
+      type: integer
+    total_spend_lower:
+      type: number
+    total_spend_upper:
+      type: number
+    total_impressions_lower:
+      type: integer
+    total_impressions_upper:
+      type: integer
+    currencies:
+      type: array
+      items:
+        type: string
+    date_range_start:
+      type: string
+      format: date
+    date_range_end:
+      type: string
+      format: date
+    publisher_platforms:
+      type: array
+      items:
+        type: string
+    target_countries:
+      type: array
+      items:
+        type: string
+    top_creative_themes:
+      type: array
+      items:
+        type: string
+    sponsors:
+      type: array
+      items:
+        type: string
+
+SimilarityLead:
+  type: object
+  properties:
+    lead_type:
+      type: string
+    description:
+      type: string
+    target_value:
+      type: string
+    confidence:
+      type: number
+    source_ads:
+      type: array
+      items:
+        type: string
+    suggested_search:
+      type: string

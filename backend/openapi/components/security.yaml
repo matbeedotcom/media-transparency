@@ -1,0 +1,44 @@
+# Security schemes
+# Authentication and authorization definitions
+
+bearerAuth:
+  type: http
+  scheme: bearer
+  bearerFormat: JWT
+  description: |
+    JWT (JSON Web Token) authentication.
+    
+    Obtain a token by authenticating with your credentials.
+    Include the token in the Authorization header:
+    
+    ```
+    Authorization: Bearer <your-token>
+    ```
+    
+    Tokens expire after 24 hours by default.
+
+apiKeyAuth:
+  type: apiKey
+  in: header
+  name: X-API-Key
+  description: |
+    API key authentication for service-to-service communication.
+    
+    Include your API key in the X-API-Key header:
+    
+    ```
+    X-API-Key: <your-api-key>
+    ```
+    
+    Contact the administrator to obtain an API key.
+
+oauth2:
+  type: oauth2
+  description: OAuth 2.0 authentication (for Meta Ad Library access)
+  flows:
+    authorizationCode:
+      authorizationUrl: https://www.facebook.com/v18.0/dialog/oauth
+      tokenUrl: https://graph.facebook.com/v18.0/oauth/access_token
+      scopes:
+        ads_read: Read access to Ad Library data
+        pages_read_engagement: Read page engagement data

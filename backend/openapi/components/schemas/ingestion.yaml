@@ -1,0 +1,277 @@
+# Ingestion schemas
+# Data ingestion requests, responses, and source configuration
+
+IngestionStatus:
+  type: string
+  enum:
+    - PENDING
+    - RUNNING
+    - COMPLETED
+    - FAILED
+    - CANCELLED
+  description: Status of an ingestion run
+
+# Ingestion requests
+IngestionTriggerRequest:
+  type: object
+  properties:
+    incremental:
+      type: boolean
+      default: true
+      description: Only process new/changed records
+    start_year:
+      type: integer
+      description: Start year for historical data
+    end_year:
+      type: integer
+      description: End year for historical data
+    limit:
+      type: integer
+      description: Maximum records to process
+    target_entities:
+      type: array
+      items:
+        type: string
+      description: Specific entities to target
+
+ProvincialIngestionRequest:
+  type: object
+  properties:
+    incremental:
+      type: boolean
+      default: true
+    limit:
+      type: integer
+    target_entities:
+      type: array
+      items:
+        type: string
+    from_csv:
+      type: string
+      description: CSV data with target entities
+
+CrossReferenceRequest:
+  type: object
+  properties:
+    provinces:
+      type: array
+      items:
+        type: string
+      description: Provinces to cross-reference
+    auto_link_threshold:
+      type: number
+      default: 0.95
+      description: Threshold for automatic linking
+    review_threshold:
+      type: number
+      default: 0.7
+      description: Threshold for manual review
+
+LinkedInIngestionRequest:
+  type: object
+  properties:
+    company_name:
+      type: string
+    company_url:
+      type: string
+      format: uri
+    company_entity_id:
+      type: string
+      format: uuid
+    csv_data:
+      type: string
+      description: CSV data with LinkedIn profiles
+    scrape:
+      type: boolean
+      default: false
+      description: Use browser scraping
+    session_cookie:
+      type: string
+      description: LinkedIn session cookie for scraping
+    titles_filter:
+      type: array
+      items:
+        type: string
+      description: Job titles to filter
+    limit:
+      type: integer
+
+QuickIngestRequest:
+  type: object
+  required:
+    - name
+  properties:
+    name:
+      type: string
+      description: Corporation name to search
+    jurisdiction:
+      type: string
+      description: Jurisdiction hint (e.g., 'US', 'CA')
+    identifiers:
+      type: object
+      properties:
+        ein:
+          type: string
+        bn:
+          type: string
+        cik:
+          type: string
+    discover_executives:
+      type: boolean
+      default: true
+      description: Also search for executives
+
+# Ingestion responses
+IngestionRunResponse:
+  type: object
+  required:
+    - run_id
+    - source
+    - status
+  properties:
+    run_id:
+      type: string
+      format: uuid
+    source:
+      type: string
+    status:
+      $ref: '#/IngestionStatus'
+    started_at:
+      type: string
+      format: date-time
+    completed_at:
+      type: string
+      format: date-time
+    records_processed:
+      type: integer
+    records_created:
+      type: integer
+    records_updated:
+      type: integer
+    duplicates_found:
+      type: integer
+    errors:
+      type: array
+      items:
+        type: object
+        properties:
+          record:
+            type: string
+          error:
+            type: string
+
+QuickIngestResponse:
+  type: object
+  properties:
+    found:
+      type: boolean
+    entity_id:
+      type: string
+      format: uuid
+    entity_name:
+      type: string
+    source:
+      type: string
+      description: Source that found the entity
+    sources_searched:
+      type: array
+      items:
+        type: string
+    external_matches:
+      type: array
+      items:
+        type: object
+        properties:
+          source:
+            type: string
+          name:
+            type: string
+          identifier:
+            type: string
+    message:
+      type: string
+    linkedin_available:
+      type: boolean
+    linkedin_company_url:
+      type: string
+    executives_hint:
+      type: string
+
+# Search results
+CompanySearchResult:
+  type: object
+  properties:
+    name:
+      type: string
+    source:
+      type: string
+    identifier:
+      type: string
+    jurisdiction:
+      type: string
+    match_score:
+      type: number
+    entity_id:
+      type: string
+      format: uuid
+      description: Existing entity ID if matched
+
+AutocompleteSuggestion:
+  type: object
+  properties:
+    name:
+      type: string
+    entity_type:
+      $ref: 'entities.yaml#/EntityType'
+    source:
+      type: string
+    id:
+      type: string
+      format: uuid
+    jurisdiction:
+      type: string
+
+# Provincial sources
+ProvincialDataSource:
+  type: object
+  properties:
+    province_code:
+      type: string
+    province_name:
+      type: string
+    source_name:
+      type: string
+    source_url:
+      type: string
+      format: uri
+    data_format:
+      type: string
+      enum: [bulk_csv, bulk_xlsx, search_api, browser_scrape]
+    update_frequency:
+      type: string
+    bulk_available:
+      type: boolean
+    enabled:
+      type: boolean
+    last_ingested:
+      type: string
+      format: date-time
+    last_record_count:
+      type: integer
+
+ReviewItem:
+  type: object
+  properties:
+    provincial_record_name:
+      type: string
+    matched_entity_id:
+      type: string
+      format: uuid
+    matched_entity_name:
+      type: string
+    match_score:
+      type: number
+    match_method:
+      type: string
+    jurisdiction:
+      type: string

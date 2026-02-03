@@ -1,0 +1,164 @@
+# Report schemas
+# Report generation and templates
+
+ReportType:
+  type: string
+  enum:
+    - STRUCTURAL_RISK
+    - TOPOLOGY_SUMMARY
+    - TIMELINE_NARRATIVE
+  description: Type of report to generate
+
+ReportStatus:
+  type: string
+  enum:
+    - PENDING
+    - GENERATING
+    - COMPLETED
+    - FAILED
+  description: Status of report generation
+
+OutputFormat:
+  type: string
+  enum:
+    - json
+    - html
+    - pdf
+    - markdown
+  description: Report output format
+
+# Template
+TemplateResponse:
+  type: object
+  required:
+    - id
+    - name
+  properties:
+    id:
+      type: string
+    name:
+      type: string
+    description:
+      type: string
+    sections:
+      type: array
+      items:
+        type: object
+        properties:
+          id:
+            type: string
+          name:
+            type: string
+          description:
+            type: string
+          required:
+            type: boolean
+    required_data:
+      type: array
+      items:
+        type: string
+      description: Data types required for this template
+    output_formats:
+      type: array
+      items:
+        $ref: '#/OutputFormat'
+
+# Report request/response
+ReportRequest:
+  type: object
+  required:
+    - report_type
+    - entity_ids
+  properties:
+    report_type:
+      $ref: '#/ReportType'
+    entity_ids:
+      type: array
+      items:
+        type: string
+        format: uuid
+      minItems: 1
+      description: Entities to include in report
+    title:
+      type: string
+      description: Custom report title
+    date_range_start:
+      type: string
+      format: date-time
+      description: Start of date range for temporal analysis
+    date_range_end:
+      type: string
+      format: date-time
+      description: End of date range for temporal analysis
+    options:
+      type: object
+      properties:
+        include_evidence:
+          type: boolean
+          default: true
+        include_visualizations:
+          type: boolean
+          default: true
+        include_recommendations:
+          type: boolean
+          default: true
+        max_entities:
+          type: integer
+          default: 50
+        max_relationships:
+          type: integer
+          default: 100
+
+ReportResponse:
+  type: object
+  required:
+    - report_id
+    - status
+  properties:
+    report_id:
+      type: string
+      format: uuid
+    status:
+      $ref: '#/ReportStatus'
+    status_url:
+      type: string
+      description: URL to check report status
+    estimated_completion:
+      type: string
+      format: date-time
+
+# Report sections
+FindingSeverity:
+  type: string
+  enum:
+    - HIGH
+    - MEDIUM
+    - LOW
+    - INFO
+  description: Severity of a finding
+
+ReportFinding:
+  type: object
+  properties:
+    id:
+      type: string
+    severity:
+      $ref: '#/FindingSeverity'
+    title:
+      type: string
+    description:
+      type: string
+    entities_involved:
+      type: array
+      items:
+        type: string
+        format: uuid
+    evidence_refs:
+      type: array
+      items:
+        type: string
+        format: uuid
+    recommendations:
+      type: array
+      items:
+        type: string

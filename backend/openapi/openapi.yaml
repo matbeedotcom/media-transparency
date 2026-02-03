@@ -1,0 +1,938 @@
+# MITDS API - OpenAPI 3.1.0 Specification
+# Media Influence Topology & Detection System REST API
+#
+# This is a bundled version of the specification.
+# For modular source files, see:
+# - paths/*.yaml - Endpoint definitions by domain
+# - components/schemas/*.yaml - Schema definitions
+# - components/parameters.yaml - Reusable parameters
+# - components/responses.yaml - Common responses
+# - components/security.yaml - Security schemes
+
+openapi: "3.1.0"
+
+info:
+  title: MITDS API
+  version: 1.0.0
+  description: |
+    # Media Influence Topology & Detection System (MITDS)
+
+    REST API for investigating connections between media outlets, organizations,
+    and their funding sources. Detects potential coordinated influence campaigns
+    through analysis of funding patterns, shared infrastructure, and temporal coordination.
+
+    ## Authentication
+    Most endpoints require JWT authentication via Bearer token.
+
+    ## Rate Limits
+    - Default: 100 req/min
+    - Search: 30 req/min
+    - Detection: 10 req/min
+  contact:
+    name: MITDS Team
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:8000
+    description: Local development
+  - url: /
+    description: Current server
+
+tags:
+  - name: Health
+    description: Service health checks
+  - name: Entities
+    description: Entity management
+  - name: Relationships
+    description: Relationship queries
+  - name: Detection
+    description: Coordination detection
+  - name: Ingestion
+    description: Data ingestion
+  - name: Reports
+    description: Report generation
+  - name: Jobs
+    description: Background jobs
+  - name: Validation
+    description: Validation framework
+  - name: Resolution
+    description: Entity resolution
+  - name: Settings
+    description: System settings
+  - name: Research
+    description: Research sessions
+  - name: Cases
+    description: Case management
+  - name: Meta OAuth
+    description: Meta authentication
+
+paths:
+  /:
+    get:
+      operationId: getRoot
+      summary: API root
+      tags: [Health]
+      security: []
+      responses:
+        '200':
+          description: API info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  version:
+                    type: string
+
+  /health:
+    get:
+      operationId: healthCheck
+      summary: Health check
+      tags: [Health]
+      security: []
+      responses:
+        '200':
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  service:
+                    type: string
+
+  /health/ready:
+    get:
+      operationId: readinessCheck
+      summary: Readiness check
+      tags: [Health]
+      security: []
+      responses:
+        '200':
+          description: Ready
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  checks:
+                    type: object
+
+  /health/live:
+    get:
+      operationId: livenessCheck
+      summary: Liveness check
+      tags: [Health]
+      security: []
+      responses:
+        '200':
+          description: Alive
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+
+  /api/v1/entities:
+    get:
+      operationId: searchEntities
+      summary: Search entities
+      tags: [Entities]
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+        - name: type
+          in: query
+          schema:
+            $ref: '#/components/schemas/EntityType'
+        - name: jurisdiction
+          in: query
+          schema:
+            type: string
+        - $ref: '#/components/parameters/LimitParam'
+        - $ref: '#/components/parameters/OffsetParam'
+      responses:
+        '200':
+          description: Entities found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/EntityResponse'
+                  total:
+                    type: integer
+                  limit:
+                    type: integer
+                  offset:
+                    type: integer
+
+  /api/v1/entities/{entity_id}:
+    get:
+      operationId: getEntity
+      summary: Get entity
+      tags: [Entities]
+      parameters:
+        - $ref: '#/components/parameters/EntityIdParam'
+      responses:
+        '200':
+          description: Entity details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntityResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/entities/{entity_id}/relationships:
+    get:
+      operationId: getEntityRelationships
+      summary: Get entity relationships
+      tags: [Entities]
+      parameters:
+        - $ref: '#/components/parameters/EntityIdParam'
+        - name: rel_type
+          in: query
+          schema:
+            $ref: '#/components/schemas/RelationType'
+        - name: direction
+          in: query
+          schema:
+            type: string
+            enum: [incoming, outgoing, both]
+        - $ref: '#/components/parameters/LimitParam'
+      responses:
+        '200':
+          description: Relationships
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  relationships:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RelationshipResponse'
+                  total:
+                    type: integer
+
+  /api/v1/relationships/path:
+    get:
+      operationId: findShortestPath
+      summary: Find shortest path
+      tags: [Relationships]
+      parameters:
+        - name: from_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: to_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: max_hops
+          in: query
+          schema:
+            type: integer
+            default: 5
+      responses:
+        '200':
+          description: Path result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PathResult'
+
+  /api/v1/detection/temporal-coordination:
+    post:
+      operationId: analyzeTemporalCoordination
+      summary: Temporal coordination analysis
+      tags: [Detection]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TemporalAnalysisRequest'
+      responses:
+        '200':
+          description: Analysis result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemporalAnalysisResponse'
+
+  /api/v1/detection/composite-score:
+    post:
+      operationId: calculateCompositeScore
+      summary: Calculate composite score
+      tags: [Detection]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompositeScoreRequest'
+      responses:
+        '200':
+          description: Score result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompositeScoreResponse'
+
+  /api/v1/ingestion/search:
+    get:
+      operationId: searchCompanies
+      summary: Search companies
+      tags: [Ingestion]
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: sources
+          in: query
+          schema:
+            type: string
+        - $ref: '#/components/parameters/LimitParam'
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CompanySearchResult'
+
+  /api/v1/ingestion/quick-ingest:
+    post:
+      operationId: quickIngest
+      summary: Quick corporation ingest
+      tags: [Ingestion]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuickIngestRequest'
+      responses:
+        '200':
+          description: Ingest result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuickIngestResponse'
+
+  /api/v1/jobs:
+    get:
+      operationId: listJobs
+      summary: List jobs
+      tags: [Jobs]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+        - $ref: '#/components/parameters/LimitParam'
+        - $ref: '#/components/parameters/OffsetParam'
+      responses:
+        '200':
+          description: Job list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobList'
+
+  /api/v1/jobs/{job_id}:
+    get:
+      operationId: getJobStatus
+      summary: Get job status
+      tags: [Jobs]
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Job status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobStatus'
+
+  /api/v1/cases:
+    get:
+      operationId: listCases
+      summary: List cases
+      tags: [Cases]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/CaseStatus'
+        - $ref: '#/components/parameters/LimitParam'
+        - $ref: '#/components/parameters/OffsetParam'
+      responses:
+        '200':
+          description: Case list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CaseResponse'
+                  total:
+                    type: integer
+    post:
+      operationId: createCase
+      summary: Create case
+      tags: [Cases]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCaseRequest'
+      responses:
+        '201':
+          description: Case created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaseResponse'
+
+  /api/v1/cases/{case_id}:
+    get:
+      operationId: getCase
+      summary: Get case
+      tags: [Cases]
+      parameters:
+        - name: case_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Case details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaseResponse'
+
+  /api/v1/research/sessions:
+    get:
+      operationId: listResearchSessions
+      summary: List research sessions
+      tags: [Research]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/SessionStatus'
+        - $ref: '#/components/parameters/LimitParam'
+      responses:
+        '200':
+          description: Sessions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SessionResponse'
+                  total:
+                    type: integer
+    post:
+      operationId: createResearchSession
+      summary: Create research session
+      tags: [Research]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSessionRequest'
+      responses:
+        '201':
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+
+  /api/v1/settings:
+    get:
+      operationId: getSettings
+      summary: Get settings
+      tags: [Settings]
+      responses:
+        '200':
+          description: Settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsResponse'
+
+  /api/v1/meta/auth/login:
+    get:
+      operationId: getMetaAuthUrl
+      summary: Get Meta OAuth URL
+      tags: [Meta OAuth]
+      security: []
+      responses:
+        '200':
+          description: OAuth URL
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  auth_url:
+                    type: string
+                    format: uri
+                  state:
+                    type: string
+
+  /api/v1/meta/auth/status:
+    get:
+      operationId: getMetaAuthStatus
+      summary: Get Meta auth status
+      tags: [Meta OAuth]
+      responses:
+        '200':
+          description: Auth status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connected:
+                    type: boolean
+                  expires_at:
+                    type: string
+                    format: date-time
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    LimitParam:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        default: 20
+        minimum: 1
+        maximum: 100
+    OffsetParam:
+      name: offset
+      in: query
+      schema:
+        type: integer
+        default: 0
+        minimum: 0
+    EntityIdParam:
+      name: entity_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    BadRequest:
+      description: Bad Request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Not Found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [success, error, error_code]
+      properties:
+        success:
+          type: boolean
+          enum: [false]
+        error:
+          type: string
+        error_code:
+          type: string
+        details:
+          type: array
+          items:
+            type: object
+            properties:
+              code:
+                type: string
+              message:
+                type: string
+              field:
+                type: string
+
+    EntityType:
+      type: string
+      enum: [PERSON, ORGANIZATION, OUTLET, DOMAIN, PLATFORM_ACCOUNT, SPONSOR, VENDOR]
+
+    EntitySummary:
+      type: object
+      required: [id, entity_type, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        entity_type:
+          $ref: '#/components/schemas/EntityType'
+        name:
+          type: string
+
+    EntityResponse:
+      type: object
+      required: [id, entity_type, name, confidence, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        entity_type:
+          $ref: '#/components/schemas/EntityType'
+        name:
+          type: string
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        aliases:
+          type: array
+          items:
+            type: string
+        properties:
+          type: object
+
+    RelationType:
+      type: string
+      enum: [FUNDED_BY, DIRECTOR_OF, EMPLOYED_BY, SPONSORED_BY, OWNS, CITED, AMPLIFIED, SHARED_INFRA]
+
+    RelationshipResponse:
+      type: object
+      required: [id, rel_type, source_entity, target_entity, confidence]
+      properties:
+        id:
+          type: string
+          format: uuid
+        rel_type:
+          $ref: '#/components/schemas/RelationType'
+        source_entity:
+          $ref: '#/components/schemas/EntitySummary'
+        target_entity:
+          $ref: '#/components/schemas/EntitySummary'
+        confidence:
+          type: number
+        properties:
+          type: object
+
+    PathResult:
+      type: object
+      properties:
+        path_found:
+          type: boolean
+        source:
+          $ref: '#/components/schemas/EntitySummary'
+        target:
+          $ref: '#/components/schemas/EntitySummary'
+        hops:
+          type: integer
+        path_nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/EntitySummary'
+
+    TemporalAnalysisRequest:
+      type: object
+      required: [entity_ids]
+      properties:
+        entity_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          minItems: 2
+        start_date:
+          type: string
+          format: date-time
+        end_date:
+          type: string
+          format: date-time
+        async_mode:
+          type: boolean
+          default: false
+
+    TemporalAnalysisResponse:
+      type: object
+      properties:
+        analysis_id:
+          type: string
+          format: uuid
+        coordination_score:
+          type: number
+        confidence:
+          type: number
+        is_coordinated:
+          type: boolean
+        explanation:
+          type: string
+
+    CompositeScoreRequest:
+      type: object
+      required: [entity_ids]
+      properties:
+        entity_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          minItems: 2
+        include_temporal:
+          type: boolean
+          default: true
+        include_funding:
+          type: boolean
+          default: true
+        include_infrastructure:
+          type: boolean
+          default: true
+
+    CompositeScoreResponse:
+      type: object
+      properties:
+        finding_id:
+          type: string
+          format: uuid
+        overall_score:
+          type: number
+        flagged:
+          type: boolean
+        explanation:
+          type: string
+
+    CompanySearchResult:
+      type: object
+      properties:
+        name:
+          type: string
+        source:
+          type: string
+        identifier:
+          type: string
+        jurisdiction:
+          type: string
+        match_score:
+          type: number
+
+    QuickIngestRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        jurisdiction:
+          type: string
+        discover_executives:
+          type: boolean
+          default: true
+
+    QuickIngestResponse:
+      type: object
+      properties:
+        found:
+          type: boolean
+        entity_id:
+          type: string
+          format: uuid
+        entity_name:
+          type: string
+        source:
+          type: string
+
+    JobStatus:
+      type: object
+      required: [job_id, job_type, status, created_at]
+      properties:
+        job_id:
+          type: string
+          format: uuid
+        job_type:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, completed, failed, cancelled]
+        created_at:
+          type: string
+          format: date-time
+        progress:
+          type: number
+
+    JobList:
+      type: object
+      properties:
+        jobs:
+          type: array
+          items:
+            $ref: '#/components/schemas/JobStatus'
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+
+    CaseStatus:
+      type: string
+      enum: [INITIALIZING, PROCESSING, PAUSED, COMPLETED, FAILED]
+
+    CreateCaseRequest:
+      type: object
+      required: [name, entry_point_type, entry_point_value]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        entry_point_type:
+          type: string
+          enum: [META_AD, CORPORATION, URL, TEXT]
+        entry_point_value:
+          type: string
+
+    CaseResponse:
+      type: object
+      required: [id, name, entry_point_type, entry_point_value, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        entry_point_type:
+          type: string
+        entry_point_value:
+          type: string
+        status:
+          $ref: '#/components/schemas/CaseStatus'
+        created_at:
+          type: string
+          format: date-time
+
+    SessionStatus:
+      type: string
+      enum: [INITIALIZING, RUNNING, PAUSED, COMPLETED, FAILED]
+
+    CreateSessionRequest:
+      type: object
+      required: [name, entry_point_type, entry_point_value]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        entry_point_type:
+          type: string
+          enum: [META_ADS, COMPANY, EIN, BN, NONPROFIT, ENTITY_ID]
+        entry_point_value:
+          type: string
+
+    SessionResponse:
+      type: object
+      required: [id, name, entry_point_type, entry_point_value, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        entry_point_type:
+          type: string
+        entry_point_value:
+          type: string
+        status:
+          $ref: '#/components/schemas/SessionStatus'
+        created_at:
+          type: string
+          format: date-time
+
+    SettingsResponse:
+      type: object
+      properties:
+        api:
+          type: object
+          properties:
+            version:
+              type: string
+            environment:
+              type: string
+        connections:
+          type: object
+        data_sources:
+          type: object
+
+security:
+  - bearerAuth: []

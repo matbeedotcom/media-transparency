@@ -1,0 +1,62 @@
+# Settings API paths
+# System settings and configuration
+
+paths:
+  /api/v1/settings:
+    get:
+      operationId: getSettings
+      summary: Get all settings
+      description: |
+        Get current system settings including:
+        - API configuration
+        - Connection status for all services
+        - Data source configuration
+      tags:
+        - Settings
+      responses:
+        '200':
+          description: System settings
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/settings.yaml#/SettingsResponse'
+
+  /api/v1/settings/connections:
+    get:
+      operationId: getConnectionsStatus
+      summary: Get connections status
+      description: |
+        Get status of all service connections including:
+        - PostgreSQL database
+        - Neo4j graph database
+        - Redis cache
+        - External API services
+      tags:
+        - Settings
+      responses:
+        '200':
+          description: Connections status
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/settings.yaml#/ConnectionsResponse'
+
+  /api/v1/settings/sources:
+    get:
+      operationId: getDataSources
+      summary: Get data sources
+      description: |
+        Get configuration and status of all data sources including:
+        - Enabled/disabled status
+        - API key requirements
+        - Last successful run
+        - Total records ingested
+      tags:
+        - Settings
+      responses:
+        '200':
+          description: Data sources configuration
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/settings.yaml#/DataSourcesResponse'

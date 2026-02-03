@@ -1,0 +1,244 @@
+# Resolution API paths
+# Entity resolution and reconciliation
+
+paths:
+  /api/v1/resolution/candidates:
+    get:
+      operationId: listCandidates
+      summary: List resolution candidates
+      description: |
+        Get list of entity resolution candidates awaiting review.
+        Candidates are potential matches found during ingestion.
+      tags:
+        - Resolution
+      parameters:
+        - name: status
+          in: query
+          description: Filter by status
+          schema:
+            type: string
+            enum: [pending, in_progress, approved, rejected, merged]
+        - name: priority
+          in: query
+          description: Filter by priority
+          schema:
+            type: string
+            enum: [low, medium, high, critical]
+        - name: strategy
+          in: query
+          description: Filter by match strategy
+          schema:
+            type: string
+            enum: [exact_name, fuzzy_name, identifier_match, multi_signal]
+        - $ref: '../components/parameters.yaml#/LimitParam'
+        - $ref: '../components/parameters.yaml#/OffsetParam'
+      responses:
+        '200':
+          description: Resolution candidates
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: '../components/schemas/resolution.yaml#/CandidateResponse'
+                  total:
+                    type: integer
+                  limit:
+                    type: integer
+                  offset:
+                    type: integer
+
+  /api/v1/resolution/candidates/{candidate_id}/merge:
+    post:
+      operationId: mergeCandidate
+      summary: Merge candidate
+      description: |
+        Approve and merge a resolution candidate.
+        This will merge the source entity into the target entity.
+      tags:
+        - Resolution
+      parameters:
+        - name: candidate_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Merge completed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  merged_entity_id:
+                    type: string
+                    format: uuid
+                  relationships_merged:
+                    type: integer
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+        '409':
+          description: Candidate already processed
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/common.yaml#/ErrorResponse'
+
+  /api/v1/resolution/candidates/{candidate_id}/reject:
+    post:
+      operationId: rejectCandidate
+      summary: Reject candidate
+      description: Reject a resolution candidate (mark as not a match).
+      tags:
+        - Resolution
+      parameters:
+        - name: candidate_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Rejection recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+        '404':
+          $ref: '../components/responses.yaml#/NotFound'
+
+  /api/v1/resolution/trigger:
+    post:
+      operationId: triggerResolution
+      summary: Trigger resolution run
+      description: |
+        Run entity resolution across all entities of a given type.
+        Identifies potential duplicates and creates candidates.
+      tags:
+        - Resolution
+      parameters:
+        - name: entity_type
+          in: query
+          description: Entity type to resolve
+          schema:
+            $ref: '../components/schemas/entities.yaml#/EntityType'
+        - name: dry_run
+          in: query
+          description: If true, only report matches without creating candidates
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Resolution results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entities_scanned:
+                    type: integer
+                  candidates_created:
+                    type: integer
+                  auto_merged:
+                    type: integer
+                  dry_run:
+                    type: boolean
+
+  /api/v1/resolution/stats:
+    get:
+      operationId: getResolutionStats
+      summary: Get resolution statistics
+      description: Get statistics about the resolution queue.
+      tags:
+        - Resolution
+      responses:
+        '200':
+          description: Resolution statistics
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/resolution.yaml#/ResolutionStatsResponse'
+
+  /api/v1/resolution/cross-border:
+    post:
+      operationId: runCrossBorderResolution
+      summary: Run cross-border resolution
+      description: |
+        Run cross-border entity resolution to link foreign grant recipients
+        with entities in the target country.
+
+        Useful for linking US nonprofits that received grants from Canadian
+        foundations with their Canadian subsidiaries or affiliates.
+      tags:
+        - Resolution
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '../components/schemas/resolution.yaml#/CrossBorderRequest'
+      responses:
+        '200':
+          description: Cross-border resolution results
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas/resolution.yaml#/CrossBorderResponse'
+
+  /api/v1/resolution/cross-border/unresolved:
+    get:
+      operationId: getUnresolvedGrants
+      summary: Get unresolved cross-border grants
+      description: Get grants to foreign entities that haven't been resolved.
+      tags:
+        - Resolution
+      parameters:
+        - name: country
+          in: query
+          description: Target country (grant recipient's country)
+          schema:
+            type: string
+          example: "CA"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: Unresolved grants
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  grants:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        grant_id:
+                          type: string
+                          format: uuid
+                        grantee_name:
+                          type: string
+                        grantor_name:
+                          type: string
+                        amount:
+                          type: number
+                        fiscal_year:
+                          type: integer
+                  total:
+                    type: integer
