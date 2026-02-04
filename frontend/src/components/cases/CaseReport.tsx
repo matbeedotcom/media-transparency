@@ -4,49 +4,60 @@
  * Shows ranked entities, relationships, and cross-border flags.
  */
 
-import { type CaseReport } from '../../services/api';
+import { type CaseReportResponse } from '@/api';
+
+// Type alias for backward compatibility
+type CaseReport = CaseReportResponse;
 
 interface CaseReportComponentProps {
   report: CaseReport;
 }
 
 export function CaseReportComponent({ report }: CaseReportComponentProps) {
+  const summary = report.summary;
+  const crossBorderFlags = report.cross_border_flags ?? [];
+  const topEntities = report.top_entities ?? [];
+  const topRelationships = report.top_relationships ?? [];
+  const unknowns = report.unknowns ?? [];
+
   return (
     <div className="case-report">
       {/* Summary */}
+      {summary && (
       <div className="report-section">
         <h3>Summary</h3>
         <div className="summary-grid">
           <div className="summary-item">
             <span className="label">Entry Point</span>
-            <span className="value">{report.summary.entry_point}</span>
+            <span className="value">{summary.entry_point ?? 'N/A'}</span>
           </div>
           <div className="summary-item">
             <span className="label">Entities</span>
-            <span className="value">{report.summary.entity_count}</span>
+            <span className="value">{summary.entity_count ?? 0}</span>
           </div>
           <div className="summary-item">
             <span className="label">Relationships</span>
-            <span className="value">{report.summary.relationship_count}</span>
+            <span className="value">{summary.relationship_count ?? 0}</span>
           </div>
           <div className="summary-item">
             <span className="label">Cross-Border</span>
-            <span className="value">{report.summary.cross_border_count}</span>
+            <span className="value">{summary.cross_border_count ?? 0}</span>
           </div>
           <div className="summary-item">
             <span className="label">Processing Time</span>
-            <span className="value">{report.summary.processing_time_seconds.toFixed(1)}s</span>
+            <span className="value">{(summary.processing_time_seconds ?? 0).toFixed(1)}s</span>
           </div>
         </div>
-        {report.summary.has_unresolved_matches && (
+        {summary.has_unresolved_matches && (
           <div className="warning-badge">
             ⚠️ Has unresolved entity matches requiring review
           </div>
         )}
       </div>
+      )}
 
       {/* Cross-Border Flags */}
-      {report.cross_border_flags.length > 0 && (
+      {crossBorderFlags.length > 0 && (
         <div className="report-section">
           <h3>⚠️ Cross-Border Connections</h3>
           <table>
@@ -59,11 +70,11 @@ export function CaseReportComponent({ report }: CaseReportComponentProps) {
               </tr>
             </thead>
             <tbody>
-              {report.cross_border_flags.map((flag, idx) => (
+              {crossBorderFlags.map((flag, idx) => (
                 <tr key={idx}>
-                  <td>{flag.us_entity_name}</td>
-                  <td>{flag.ca_entity_name}</td>
-                  <td>{flag.relationship_type}</td>
+                  <td>{flag.us_entity_name ?? 'Unknown'}</td>
+                  <td>{flag.ca_entity_name ?? 'Unknown'}</td>
+                  <td>{flag.relationship_type ?? 'Unknown'}</td>
                   <td>{flag.amount ? `$${flag.amount.toLocaleString()}` : 'N/A'}</td>
                 </tr>
               ))}
@@ -73,7 +84,7 @@ export function CaseReportComponent({ report }: CaseReportComponentProps) {
       )}
 
       {/* Top Entities */}
-      {report.top_entities.length > 0 && (
+      {topEntities.length > 0 && (
         <div className="report-section">
           <h3>Top Entities</h3>
           <table>
@@ -87,13 +98,13 @@ export function CaseReportComponent({ report }: CaseReportComponentProps) {
               </tr>
             </thead>
             <tbody>
-              {report.top_entities.slice(0, 10).map((entity, idx) => (
-                <tr key={entity.entity_id}>
+              {topEntities.slice(0, 10).map((entity, idx) => (
+                <tr key={entity.entity_id ?? idx}>
                   <td>{idx + 1}</td>
-                  <td>{entity.name}</td>
-                  <td>{entity.entity_type}</td>
-                  <td>{entity.jurisdiction || 'Unknown'}</td>
-                  <td>{entity.relevance_score.toFixed(2)}</td>
+                  <td>{entity.name ?? 'Unknown'}</td>
+                  <td>{entity.entity_type ?? 'Unknown'}</td>
+                  <td>{entity.jurisdiction ?? 'Unknown'}</td>
+                  <td>{(entity.relevance_score ?? 0).toFixed(2)}</td>
                 </tr>
               ))}
             </tbody>
@@ -102,7 +113,7 @@ export function CaseReportComponent({ report }: CaseReportComponentProps) {
       )}
 
       {/* Top Relationships */}
-      {report.top_relationships.length > 0 && (
+      {topRelationships.length > 0 && (
         <div className="report-section">
           <h3>Key Relationships</h3>
           <table>
@@ -116,13 +127,13 @@ export function CaseReportComponent({ report }: CaseReportComponentProps) {
               </tr>
             </thead>
             <tbody>
-              {report.top_relationships.slice(0, 10).map((rel, idx) => (
+              {topRelationships.slice(0, 10).map((rel, idx) => (
                 <tr key={idx}>
-                  <td>{rel.source_name}</td>
-                  <td>{rel.target_name}</td>
-                  <td>{rel.relationship_type}</td>
+                  <td>{rel.source_name ?? 'Unknown'}</td>
+                  <td>{rel.target_name ?? 'Unknown'}</td>
+                  <td>{rel.relationship_type ?? 'Unknown'}</td>
                   <td>{rel.amount ? `$${rel.amount.toLocaleString()}` : 'N/A'}</td>
-                  <td>{rel.significance_score.toFixed(2)}</td>
+                  <td>{(rel.significance_score ?? 0).toFixed(2)}</td>
                 </tr>
               ))}
             </tbody>
@@ -131,19 +142,19 @@ export function CaseReportComponent({ report }: CaseReportComponentProps) {
       )}
 
       {/* Unknowns */}
-      {report.unknowns.length > 0 && (
+      {unknowns.length > 0 && (
         <div className="report-section">
           <h3>Unknowns</h3>
           <p className="section-description">
             The following entities could not be fully traced:
           </p>
           <ul className="unknowns-list">
-            {report.unknowns.map((unknown, idx) => (
+            {unknowns.map((unknown, idx) => (
               <li key={idx}>
-                <strong>{unknown.entity_name}</strong>: {unknown.reason}
-                {unknown.attempted_sources.length > 0 && (
+                <strong>{unknown.entity_name ?? 'Unknown'}</strong>: {unknown.reason ?? 'Unknown reason'}
+                {(unknown.attempted_sources?.length ?? 0) > 0 && (
                   <span className="attempted-sources">
-                    (Attempted: {unknown.attempted_sources.join(', ')})
+                    (Attempted: {(unknown.attempted_sources ?? []).join(', ')})
                   </span>
                 )}
               </li>

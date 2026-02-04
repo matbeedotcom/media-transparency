@@ -9,15 +9,33 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getCase,
   getCaseReport,
-  getCaseProcessingDetails,
+  getCaseProcessing,
   startCase,
   pauseCase,
   resumeCase,
-  type CaseResponse,
-  type CaseReport,
-  type ProcessingDetails,
-} from '../services/api';
+  type CaseReportResponse,
+} from '@/api';
 import { CaseReportComponent } from '../components/cases/CaseReport';
+
+// Type definitions for incomplete OpenAPI schema types
+interface CaseStats {
+  entity_count?: number;
+  relationship_count?: number;
+  leads_processed?: number;
+  leads_pending?: number;
+  pending_matches?: number;
+}
+
+interface ProcessingDetails {
+  current_phase?: string;
+  progress_percent?: number;
+  leads_total?: number;
+  leads_completed?: number;
+  leads_failed?: number;
+  elapsed_seconds?: number;
+  recent_entities?: string[];
+  recent_leads?: string[];
+}
 
 const statusColors: Record<string, string> = {
   initializing: 'text-muted',
@@ -58,7 +76,7 @@ export default function CaseDetail() {
     queryFn: () => getCase(id!),
     refetchInterval: (query) => {
       const data = query.state.data;
-      if (data?.status === 'processing') return 5000;
+      if (data?.status === 'PROCESSING') return 5000;
       return false;
     },
     enabled: !!id,
@@ -66,15 +84,15 @@ export default function CaseDetail() {
 
   const { data: reportData, isLoading: reportLoading } = useQuery({
     queryKey: ['case-report', id],
-    queryFn: () => getCaseReport(id!, 'json') as Promise<CaseReport>,
-    enabled: !!id && caseData?.status === 'completed',
+    queryFn: ({ signal }) => getCaseReport(id!, { format: 'json' }, signal),
+    enabled: !!id && caseData?.status === 'COMPLETED',
   });
 
   const { data: processingDetails } = useQuery({
     queryKey: ['case-processing', id],
-    queryFn: () => getCaseProcessingDetails(id!),
-    refetchInterval: caseData?.status === 'processing' ? 2000 : false,
-    enabled: !!id && caseData?.status === 'processing',
+    queryFn: () => getCaseProcessing(id!),
+    refetchInterval: caseData?.status === 'PROCESSING' ? 2000 : false,
+    enabled: !!id && caseData?.status === 'PROCESSING',
   });
 
   const startMutation = useMutation({
@@ -123,7 +141,7 @@ export default function CaseDetail() {
           </span>
         </div>
         <div className="header-actions">
-          {caseData.status === 'initializing' && (
+          {caseData.status === 'INITIALIZING' && (
             <button
               className="btn btn-primary"
               onClick={() => startMutation.mutate()}
@@ -132,7 +150,7 @@ export default function CaseDetail() {
               Start Processing
             </button>
           )}
-          {caseData.status === 'processing' && (
+          {caseData.status === 'PROCESSING' && (
             <button
               className="btn btn-warning"
               onClick={() => pauseMutation.mutate()}
@@ -141,7 +159,7 @@ export default function CaseDetail() {
               Pause
             </button>
           )}
-          {caseData.status === 'paused' && (
+          {caseData.status === 'PAUSED' && (
             <button
               className="btn btn-primary"
               onClick={() => resumeMutation.mutate()}
@@ -150,9 +168,9 @@ export default function CaseDetail() {
               Resume
             </button>
           )}
-          {caseData.stats.pending_matches > 0 && (
+          {((caseData.stats as CaseStats | undefined)?.pending_matches ?? 0) > 0 && (
             <Link to={`/cases/${id}/review`} className="btn btn-secondary">
-              Review Matches ({caseData.stats.pending_matches})
+              Review Matches ({(caseData.stats as CaseStats | undefined)?.pending_matches ?? 0})
             </Link>
           )}
         </div>
@@ -172,7 +190,7 @@ export default function CaseDetail() {
           </div>
           <div className="info-row">
             <span className="label">Created:</span>
-            <span className="value">{new Date(caseData.created_at).toLocaleString()}</span>
+            <span className="value">{caseData.created_at ? new Date(caseData.created_at).toLocaleString() : 'N/A'}</span>
           </div>
           {caseData.completed_at && (
             <div className="info-row">
@@ -186,25 +204,25 @@ export default function CaseDetail() {
       {/* Stats */}
       <div className="stats-grid">
         <div className="card stat-card">
-          <div className="stat-value">{caseData.stats.entity_count}</div>
+          <div className="stat-value">{(caseData.stats as CaseStats | undefined)?.entity_count ?? 0}</div>
           <div className="stat-label">Entities</div>
         </div>
         <div className="card stat-card">
-          <div className="stat-value">{caseData.stats.relationship_count}</div>
+          <div className="stat-value">{(caseData.stats as CaseStats | undefined)?.relationship_count ?? 0}</div>
           <div className="stat-label">Relationships</div>
         </div>
         <div className="card stat-card">
-          <div className="stat-value">{caseData.stats.leads_processed}</div>
+          <div className="stat-value">{(caseData.stats as CaseStats | undefined)?.leads_processed ?? 0}</div>
           <div className="stat-label">Leads Processed</div>
         </div>
         <div className="card stat-card">
-          <div className="stat-value">{caseData.stats.leads_pending}</div>
+          <div className="stat-value">{(caseData.stats as CaseStats | undefined)?.leads_pending ?? 0}</div>
           <div className="stat-label">Leads Pending</div>
         </div>
       </div>
 
       {/* Report */}
-      {caseData.status === 'completed' && (
+      {caseData.status === 'COMPLETED' && (
         <div className="card">
           <h2>Case Report</h2>
           {reportLoading ? (
@@ -212,8 +230,8 @@ export default function CaseDetail() {
               <div className="spinner" />
               <span>Loading report...</span>
             </div>
-          ) : reportData ? (
-            <CaseReportComponent report={reportData} />
+          ) : reportData && typeof reportData === 'object' ? (
+            <CaseReportComponent report={reportData as CaseReportResponse} />
           ) : (
             <p>Report not available</p>
           )}
@@ -221,7 +239,9 @@ export default function CaseDetail() {
       )}
 
       {/* Processing indicator */}
-      {caseData.status === 'processing' && (
+      {caseData.status === 'PROCESSING' && (() => {
+        const pd = processingDetails as ProcessingDetails | undefined;
+        return (
         <div className="card processing-card">
           <div className="processing-header">
             <div className="processing-indicator">
@@ -229,37 +249,37 @@ export default function CaseDetail() {
               <div>
                 <h3>Processing...</h3>
                 <p className="phase-text">
-                  {processingDetails?.current_phase === 'processing_leads' && 'Processing leads'}
-                  {processingDetails?.current_phase === 'initializing' && 'Initializing research session'}
-                  {processingDetails?.current_phase === 'finalizing' && 'Finalizing results'}
-                  {!processingDetails && 'Starting...'}
+                  {pd?.current_phase === 'processing_leads' && 'Processing leads'}
+                  {pd?.current_phase === 'initializing' && 'Initializing research session'}
+                  {pd?.current_phase === 'finalizing' && 'Finalizing results'}
+                  {!pd && 'Starting...'}
                 </p>
               </div>
             </div>
-            {processingDetails && processingDetails.progress_percent > 0 && (
+            {pd && (pd.progress_percent ?? 0) > 0 && (
               <div className="progress-badge">
-                {processingDetails.progress_percent.toFixed(0)}%
+                {(pd.progress_percent ?? 0).toFixed(0)}%
               </div>
             )}
           </div>
           
           {/* Progress bar */}
-          {processingDetails && processingDetails.leads_total > 0 && (
+          {pd && (pd.leads_total ?? 0) > 0 && (
             <div className="progress-section">
               <div className="progress-bar-container">
                 <div 
                   className="progress-bar-fill" 
-                  style={{ width: `${processingDetails.progress_percent}%` }}
+                  style={{ width: `${pd.progress_percent ?? 0}%` }}
                 />
               </div>
               <div className="progress-stats">
-                <span>{processingDetails.leads_completed} / {processingDetails.leads_total} leads</span>
-                {processingDetails.leads_failed > 0 && (
-                  <span className="failed-count">{processingDetails.leads_failed} failed</span>
+                <span>{pd.leads_completed ?? 0} / {pd.leads_total ?? 0} leads</span>
+                {(pd.leads_failed ?? 0) > 0 && (
+                  <span className="failed-count">{pd.leads_failed} failed</span>
                 )}
-                {processingDetails.elapsed_seconds > 0 && (
+                {(pd.elapsed_seconds ?? 0) > 0 && (
                   <span className="elapsed-time">
-                    {formatElapsedTime(processingDetails.elapsed_seconds)}
+                    {formatElapsedTime(pd.elapsed_seconds ?? 0)}
                   </span>
                 )}
               </div>
@@ -267,23 +287,23 @@ export default function CaseDetail() {
           )}
           
           {/* Recent activity */}
-          {processingDetails && (processingDetails.recent_entities.length > 0 || processingDetails.recent_leads.length > 0) && (
+          {pd && ((pd.recent_entities?.length ?? 0) > 0 || (pd.recent_leads?.length ?? 0) > 0) && (
             <div className="recent-activity">
-              {processingDetails.recent_entities.length > 0 && (
+              {(pd.recent_entities?.length ?? 0) > 0 && (
                 <div className="activity-section">
                   <h4>Recently Discovered</h4>
                   <ul className="activity-list">
-                    {processingDetails.recent_entities.map((name, idx) => (
+                    {(pd.recent_entities ?? []).map((name, idx) => (
                       <li key={idx} className="entity-item">{name}</li>
                     ))}
                   </ul>
                 </div>
               )}
-              {processingDetails.recent_leads.length > 0 && (
+              {(pd.recent_leads?.length ?? 0) > 0 && (
                 <div className="activity-section">
                   <h4>Currently Processing</h4>
                   <ul className="activity-list">
-                    {processingDetails.recent_leads.map((lead, idx) => (
+                    {(pd.recent_leads ?? []).map((lead, idx) => (
                       <li key={idx} className="lead-item">{lead}</li>
                     ))}
                   </ul>
@@ -292,7 +312,8 @@ export default function CaseDetail() {
             </div>
           )}
         </div>
-      )}
+        );
+      })()}
 
       <style>{`
         .page-header {

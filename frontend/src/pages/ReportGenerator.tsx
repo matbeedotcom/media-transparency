@@ -12,7 +12,8 @@ import {
   generateReport as apiGenerateReport,
   getReport,
   getReportStatus,
-} from '../services/api';
+  type GetReportParams,
+} from '@/api';
 
 // =========================
 // Types
@@ -36,7 +37,7 @@ interface EntitySearchResult {
 interface ReportRecord {
   id: string;
   report_type: string;
-  status: 'pending' | 'generating' | 'completed' | 'failed';
+  status: 'PENDING' | 'GENERATING' | 'COMPLETED' | 'FAILED';
   created_at: string;
   completed_at?: string;
   error?: string;
@@ -94,31 +95,57 @@ interface ReportRequest {
 // =========================
 
 async function fetchTemplates(): Promise<ReportTemplate[]> {
-  return getReportTemplates() as Promise<ReportTemplate[]>;
+  const result = await getReportTemplates();
+  // Map to our local type - cast sections to string[] for compatibility
+  return (result ?? []).map((t) => ({
+    id: t.id ?? '',
+    name: t.name ?? '',
+    description: t.description ?? '',
+    sections: (t.sections ?? []).map((s) => typeof s === 'string' ? s : (s as { name?: string }).name ?? ''),
+    required_data: t.required_data ?? [],
+    output_formats: t.output_formats ?? [],
+  }));
 }
 
 async function searchEntitiesLocal(query: string): Promise<EntitySearchResult[]> {
   if (!query || query.length < 2) return [];
   const data = await apiSearchEntities({ q: query, limit: 10 });
-  return (data.results || []).map((e) => ({ id: e.id, name: e.name, entity_type: e.entity_type }));
+  return (data.results || []).map((e) => ({ 
+    id: e.id ?? '', 
+    name: e.name ?? '', 
+    entity_type: e.entity_type ?? '' 
+  }));
 }
 
 async function generateReport(request: ReportRequest): Promise<{ report_id: string; status: string; status_url: string }> {
   const result = await apiGenerateReport({
-    template_id: request.report_type,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    report_type: request.report_type as any,
     entity_ids: request.entity_ids,
-    options: request.options,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    options: request.options as any,
   });
-  return { report_id: result.job_id, status: result.status, status_url: result.status_url || '' };
+  return { 
+    report_id: result.report_id ?? '', 
+    status: result.status ?? 'PENDING', 
+    status_url: result.status_url ?? '' 
+  };
 }
 
 async function fetchReport(reportId: string, format: string = 'json'): Promise<ReportRecord> {
-  return getReport(reportId, format as 'json' | 'html' | 'pdf' | 'markdown') as Promise<ReportRecord>;
+  const params: GetReportParams = { format: format as GetReportParams['format'] };
+  const result = await getReport(reportId, params);
+  // Cast to our local type
+  return result as unknown as ReportRecord;
 }
 
 async function fetchReportStatus(reportId: string): Promise<{ id: string; status: string; error?: string }> {
   const result = await getReportStatus(reportId);
-  return { id: result.report_id, status: result.status, error: result.error || undefined };
+  return { 
+    id: String(result.id ?? ''), 
+    status: String(result.status ?? 'unknown'), 
+    error: result.error ? String(result.error) : undefined 
+  };
 }
 
 // =========================
@@ -189,7 +216,7 @@ export default function ReportGenerator() {
       for (const reportId of pollingReportIds) {
         try {
           const status = await fetchReportStatus(reportId);
-          if (status.status === 'completed' || status.status === 'failed') {
+          if (status.status === 'COMPLETED' || status.status === 'FAILED') {
             // Fetch full report
             const fullReport = await fetchReport(reportId);
             setGeneratedReports((prev) =>
@@ -220,7 +247,7 @@ export default function ReportGenerator() {
         {
           id: data.report_id,
           report_type: selectedTemplateId,
-          status: 'pending',
+          status: 'PENDING',
           created_at: new Date().toISOString(),
         },
         ...prev,
@@ -345,11 +372,11 @@ export default function ReportGenerator() {
 
   const getStatusColor = (status: string): string => {
     switch (status) {
-      case 'completed':
+      case 'COMPLETED':
         return 'var(--color-success)';
-      case 'failed':
+      case 'FAILED':
         return 'var(--color-danger)';
-      case 'generating':
+      case 'GENERATING':
         return 'var(--color-warning)';
       default:
         return 'var(--text-muted)';
@@ -608,7 +635,7 @@ export default function ReportGenerator() {
                           <span className="report-error">{report.error}</span>
                         )}
                       </div>
-                      {report.status === 'completed' && (
+                      {report.status === 'COMPLETED' && (
                         <div className="report-actions">
                           <button
                             type="button"

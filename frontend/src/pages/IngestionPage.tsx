@@ -9,7 +9,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getIngestionStatus,
-  searchIngestionSources,
+  searchCompanies,
   triggerIngestion,
   getIngestionRuns,
   getIngestionRunLogs,
@@ -17,9 +17,9 @@ import {
   cancelJob,
   getJobResult,
   type CompanySearchResult,
-  type JobStatusFull,
+  type JobStatus as JobStatusFull,
   type IngestionRun,
-} from '../services/api';
+} from '@/api';
 
 type Tab = 'search' | 'configure' | 'jobs' | 'history';
 
@@ -28,6 +28,52 @@ interface SourceConfig {
   startYear: string;
   endYear: string;
   limit: string;
+}
+
+// Local interface for selected entities with a flattened identifier
+interface SelectedEntity {
+  name: string;
+  source: string;
+  identifier: string;
+  identifier_type: string;
+  jurisdiction?: string;
+  status?: string;
+  address?: string;
+  match_score?: number;
+}
+
+// Helper to extract primary identifier from CompanySearchResult
+function extractPrimaryIdentifier(result: CompanySearchResult): { identifier: string; identifier_type: string } {
+  // The search API returns identifier and identifier_type directly
+  if (result.identifier && result.identifier_type) {
+    return { identifier: result.identifier, identifier_type: result.identifier_type };
+  }
+  // Fallback for legacy format with identifiers dict (if present)
+  const legacyResult = result as { identifiers?: Record<string, string> };
+  if (legacyResult.identifiers) {
+    const entries = Object.entries(legacyResult.identifiers);
+    if (entries.length > 0) {
+      const [key, value] = entries[0];
+      return { identifier: String(value ?? ''), identifier_type: key };
+    }
+  }
+  // Last resort: use name
+  return { identifier: result.name ?? '', identifier_type: 'name' };
+}
+
+// Convert CompanySearchResult to SelectedEntity
+function toSelectedEntity(result: CompanySearchResult): SelectedEntity {
+  const { identifier, identifier_type } = extractPrimaryIdentifier(result);
+  return {
+    name: result.name ?? '',
+    source: result.source ?? '',
+    identifier,
+    identifier_type,
+    jurisdiction: result.jurisdiction,
+    status: result.status,
+    address: result.address,
+    match_score: result.match_score,
+  };
 }
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -70,7 +116,7 @@ export default function IngestionPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchTimeout, setSearchTimeout] = useState<ReturnType<typeof setTimeout> | null>(null);
   const [sourceFilter, setSourceFilter] = useState('');
-  const [selectedEntities, setSelectedEntities] = useState<CompanySearchResult[]>([]);
+  const [selectedEntities, setSelectedEntities] = useState<SelectedEntity[]>([]);
   const [targetIncremental, setTargetIncremental] = useState(true);
   const [targetStartYear, setTargetStartYear] = useState('');
   const [targetEndYear, setTargetEndYear] = useState('');
@@ -98,13 +144,13 @@ export default function IngestionPage() {
 
   const { data: statusData, isLoading: statusLoading } = useQuery({
     queryKey: ['ingestion-status'],
-    queryFn: getIngestionStatus,
+    queryFn: ({ signal }) => getIngestionStatus(signal),
     refetchInterval: 30000,
   });
 
   const { data: searchData, isLoading: searchLoading } = useQuery({
     queryKey: ['ingestion-search', searchQuery, sourceFilter],
-    queryFn: () => searchIngestionSources({
+    queryFn: () => searchCompanies({
       q: searchQuery,
       sources: sourceFilter || undefined,
       limit: 25,
@@ -135,7 +181,8 @@ export default function IngestionPage() {
     queryKey: ['ingestion-runs', historySourceFilter, historyStatusFilter],
     queryFn: () => getIngestionRuns({
       source: historySourceFilter || undefined,
-      status: historyStatusFilter || undefined,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      status: (historyStatusFilter || undefined) as any,
       limit: 25,
     }),
     enabled: activeTab === 'history',
@@ -144,7 +191,7 @@ export default function IngestionPage() {
   // Log viewer query (polls while live)
   const { data: logData } = useQuery({
     queryKey: ['run-logs', expandedRunId, logOffset],
-    queryFn: () => getIngestionRunLogs(expandedRunId!, logOffset),
+    queryFn: () => getIngestionRunLogs(expandedRunId!, { offset: logOffset }),
     enabled: !!expandedRunId,
     refetchInterval: (query) => {
       return query.state.data?.is_live ? 2000 : false;
@@ -153,9 +200,9 @@ export default function IngestionPage() {
 
   // Accumulate new log lines when data arrives
   useEffect(() => {
-    if (logData && logData.lines.length > 0) {
-      setLogLines((prev) => [...prev, ...logData.lines]);
-      setLogOffset(logData.total_lines);
+    if (logData && logData.lines && logData.lines.length > 0) {
+      setLogLines((prev) => [...prev, ...(logData.lines ?? [])]);
+      setLogOffset(logData.total_lines ?? 0);
     }
   }, [logData]);
 
@@ -174,9 +221,11 @@ export default function IngestionPage() {
   // Mutations
   // ========================
 
+  type SourceType = "irs990" | "cra" | "sec_edgar" | "canada_corps" | "sedar" | "alberta-nonprofits" | "meta_ads";
+  
   const triggerMutation = useMutation({
-    mutationFn: ({ source, options }: { source: string; options?: Parameters<typeof triggerIngestion>[1] }) =>
-      triggerIngestion(source, options),
+    mutationFn: ({ source, options }: { source: SourceType; options?: Parameters<typeof triggerIngestion>[1] }) =>
+      triggerIngestion(source, options ?? {}),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['ingestion-status'] });
       queryClient.invalidateQueries({ queryKey: ['jobs-list'] });
@@ -185,7 +234,7 @@ export default function IngestionPage() {
   });
 
   const cancelMutation = useMutation({
-    mutationFn: cancelJob,
+    mutationFn: (jobId: string) => cancelJob(jobId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['jobs-list'] });
     },
@@ -203,16 +252,17 @@ export default function IngestionPage() {
   };
 
   const handleSelectEntity = (result: CompanySearchResult) => {
+    const entity = toSelectedEntity(result);
     setSelectedEntities((prev) => {
       const exists = prev.some(
-        (e) => e.identifier === result.identifier && e.source === result.source
+        (e) => e.identifier === entity.identifier && e.source === entity.source
       );
       if (exists) {
         return prev.filter(
-          (e) => !(e.identifier === result.identifier && e.source === result.source)
+          (e) => !(e.identifier === entity.identifier && e.source === entity.source)
         );
       }
-      return [...prev, result];
+      return [...prev, entity];
     });
   };
 
@@ -230,7 +280,7 @@ export default function IngestionPage() {
 
     Object.entries(bySource).forEach(([source, identifiers]) => {
       triggerMutation.mutate({
-        source,
+        source: source as SourceType,
         options: {
           incremental: targetIncremental,
           start_year: startYear,
@@ -259,7 +309,7 @@ export default function IngestionPage() {
     if (triggerMutation.isPending) return;
     const cfg = getSourceConfig(source);
     triggerMutation.mutate({
-      source,
+      source: source as SourceType,
       options: {
         incremental: cfg.incremental,
         start_year: cfg.startYear ? parseInt(cfg.startYear) : undefined,
@@ -272,17 +322,19 @@ export default function IngestionPage() {
   const handleTriggerAll = () => {
     if (triggerMutation.isPending) return;
     const enabled = (statusData?.sources ?? []).filter(
-      (s) => s.status !== 'disabled' && s.status !== 'running'
+      (s: { status?: string; source?: string }) => s.status !== 'disabled' && s.status !== 'running'
     );
-    enabled.forEach((s) => {
-      triggerMutation.mutate({ source: s.source, options: { incremental: true } });
+    enabled.forEach((s: { source?: string }) => {
+      if (s.source) {
+        triggerMutation.mutate({ source: s.source as SourceType, options: { incremental: true } });
+      }
     });
     setActiveTab('jobs');
   };
 
   const handleQuickRun = (source: string) => {
     if (triggerMutation.isPending) return;
-    triggerMutation.mutate({ source, options: { incremental: true } });
+    triggerMutation.mutate({ source: source as SourceType, options: { incremental: true } });
   };
 
   // Group selections by source for summary
@@ -292,7 +344,7 @@ export default function IngestionPage() {
   }, {} as Record<string, number>);
 
   const enabledSources = (statusData?.sources ?? []).filter(
-    (s) => s.status !== 'disabled'
+    (s: { status?: string }) => s.status !== 'disabled'
   );
 
   const activeJobs = (jobsData?.jobs ?? []).filter(
@@ -320,14 +372,14 @@ export default function IngestionPage() {
           <div className="loading"><div className="spinner" /> Loading sources...</div>
         ) : (
           enabledSources.map((source) => (
-            <div key={source.source} className="source-card card">
+            <div key={source.source ?? 'unknown'} className="source-card card">
               <div className="source-card-header">
-                <strong>{SOURCE_LABELS[source.source] ?? source.source}</strong>
+                <strong>{SOURCE_LABELS[source.source ?? ''] ?? source.source ?? ''}</strong>
                 <span
                   className="status-badge"
-                  style={{ background: STATUS_COLORS[source.status] ?? 'var(--text-muted)' }}
+                  style={{ background: STATUS_COLORS[source.status ?? ''] ?? 'var(--text-muted)' }}
                 >
-                  {STATUS_ICONS[source.status] ?? '?'} {source.status}
+                  {STATUS_ICONS[source.status ?? ''] ?? '?'} {source.status ?? ''}
                 </span>
               </div>
               <div className="source-card-stats">
@@ -342,7 +394,7 @@ export default function IngestionPage() {
                 type="button"
                 className="btn btn-secondary btn-sm"
                 disabled={source.status === 'running' || triggerMutation.isPending}
-                onClick={() => handleQuickRun(source.source)}
+                onClick={() => source.source && handleQuickRun(source.source)}
               >
                 Quick Run
               </button>
@@ -395,8 +447,8 @@ export default function IngestionPage() {
               >
                 <option value="">All Sources</option>
                 {enabledSources.map((s) => (
-                  <option key={s.source} value={s.source}>
-                    {SOURCE_LABELS[s.source] ?? s.source}
+                  <option key={s.source ?? 'unknown'} value={s.source ?? ''}>
+                    {SOURCE_LABELS[s.source ?? ''] ?? s.source ?? ''}
                   </option>
                 ))}
               </select>
@@ -415,7 +467,9 @@ export default function IngestionPage() {
                     <button
                       type="button"
                       className="chip-remove"
-                      onClick={() => handleSelectEntity(entity)}
+                      onClick={() => setSelectedEntities((prev) => 
+                        prev.filter((e) => !(e.identifier === entity.identifier && e.source === entity.source))
+                      )}
                       title="Remove"
                     >
                       x
@@ -430,7 +484,7 @@ export default function IngestionPage() {
               <div className="search-status">Searching across sources...</div>
             )}
 
-            {searchData && searchData.results.length > 0 && (
+            {searchData && searchData.results && searchData.results.length > 0 && (
               <div className="card search-results-card">
                 <table>
                   <thead>
@@ -444,47 +498,37 @@ export default function IngestionPage() {
                   </thead>
                   <tbody>
                     {searchData.results.map((result) => {
+                      const { identifier, identifier_type } = extractPrimaryIdentifier(result);
                       const isSelected = selectedEntities.some(
-                        (e) => e.identifier === result.identifier && e.source === result.source
+                        (e) => e.identifier === identifier && e.source === result.source
                       );
                       return (
                         <tr
-                          key={`${result.source}-${result.identifier}`}
+                          key={`${result.source ?? 'unknown'}-${identifier}`}
                           className={`result-row ${isSelected ? 'result-row-selected' : ''}`}
                           onClick={() => handleSelectEntity(result)}
                         >
                           <td>
                             <input type="checkbox" checked={isSelected} readOnly />
                           </td>
-                          <td><strong>{result.name}</strong></td>
+                          <td><strong>{result.name ?? ''}</strong></td>
                           <td>
                             <span className="source-tag">
-                              {SOURCE_LABELS[result.source] ?? result.source}
+                              {SOURCE_LABELS[result.source ?? ''] ?? result.source ?? ''}
                             </span>
                           </td>
                           <td className="text-muted">
-                            {result.identifier_type}: {result.identifier}
+                            {identifier_type}: {identifier}
                           </td>
                           <td className="result-details">
-                            {Array.isArray(result.details.tickers) && (
-                              <span className="detail-tag">
-                                {(result.details.tickers as string[]).join(', ')}
-                              </span>
+                            {result.jurisdiction && (
+                              <span className="detail-tag">{result.jurisdiction}</span>
                             )}
-                            {typeof result.details.form_type === 'string' && (
-                              <span className="detail-tag">Form {result.details.form_type}</span>
+                            {result.status && (
+                              <span className="detail-tag">{result.status}</span>
                             )}
-                            {typeof result.details.province === 'string' && (
-                              <span className="detail-tag">{result.details.province}</span>
-                            )}
-                            {typeof result.details.status === 'string' && (
-                              <span className="detail-tag">{result.details.status}</span>
-                            )}
-                            {typeof result.details.operating_name === 'string' && (
-                              <span className="detail-tag">aka {result.details.operating_name}</span>
-                            )}
-                            {typeof result.details.corporation_type === 'string' && (
-                              <span className="detail-tag">{result.details.corporation_type}</span>
+                            {result.address && (
+                              <span className="detail-tag">{result.address}</span>
                             )}
                           </td>
                         </tr>
@@ -492,7 +536,7 @@ export default function IngestionPage() {
                     })}
                   </tbody>
                 </table>
-                {searchData.sources_failed.length > 0 && (
+                {searchData.sources_failed && searchData.sources_failed.length > 0 && (
                   <div className="search-status text-warning">
                     Search failed for: {searchData.sources_failed.join(', ')}
                   </div>
@@ -500,7 +544,7 @@ export default function IngestionPage() {
               </div>
             )}
 
-            {searchData && searchQuery.length >= 2 && searchData.results.length === 0 && !searchLoading && (
+            {searchData && searchQuery.length >= 2 && (!searchData.results || searchData.results.length === 0) && !searchLoading && (
               <div className="search-status text-muted">
                 No results found for &quot;{searchQuery}&quot;
               </div>
@@ -581,17 +625,18 @@ export default function IngestionPage() {
         {activeTab === 'configure' && (
           <div className="configure-tab">
             {enabledSources.map((source) => {
-              const cfg = getSourceConfig(source.source);
+              const sourceKey = source.source ?? '';
+              const cfg = getSourceConfig(sourceKey);
               return (
-                <div key={source.source} className="card config-card">
+                <div key={sourceKey} className="card config-card">
                   <div className="config-card-header">
                     <div>
-                      <h3>{SOURCE_LABELS[source.source] ?? source.source}</h3>
+                      <h3>{SOURCE_LABELS[sourceKey] ?? sourceKey}</h3>
                       <span
                         className="status-badge-sm"
-                        style={{ background: STATUS_COLORS[source.status] ?? 'var(--text-muted)' }}
+                        style={{ background: STATUS_COLORS[source.status ?? ''] ?? 'var(--text-muted)' }}
                       >
-                        {source.status}
+                        {source.status ?? ''}
                       </span>
                       <span className="text-muted config-meta">
                         Last: {source.last_successful_run
@@ -607,7 +652,7 @@ export default function IngestionPage() {
                       <input
                         type="checkbox"
                         checked={cfg.incremental}
-                        onChange={(e) => updateSourceConfig(source.source, { incremental: e.target.checked })}
+                        onChange={(e) => updateSourceConfig(sourceKey, { incremental: e.target.checked })}
                       />
                       Incremental
                     </label>
@@ -619,7 +664,7 @@ export default function IngestionPage() {
                         min="2000"
                         max="2030"
                         value={cfg.startYear}
-                        onChange={(e) => updateSourceConfig(source.source, { startYear: e.target.value })}
+                        onChange={(e) => updateSourceConfig(sourceKey, { startYear: e.target.value })}
                         placeholder="e.g. 2020"
                       />
                     </label>
@@ -631,7 +676,7 @@ export default function IngestionPage() {
                         min="2000"
                         max="2030"
                         value={cfg.endYear}
-                        onChange={(e) => updateSourceConfig(source.source, { endYear: e.target.value })}
+                        onChange={(e) => updateSourceConfig(sourceKey, { endYear: e.target.value })}
                         placeholder="e.g. 2024"
                       />
                     </label>
@@ -642,7 +687,7 @@ export default function IngestionPage() {
                         className="config-input"
                         min="1"
                         value={cfg.limit}
-                        onChange={(e) => updateSourceConfig(source.source, { limit: e.target.value })}
+                        onChange={(e) => updateSourceConfig(sourceKey, { limit: e.target.value })}
                         placeholder="max"
                       />
                     </label>
@@ -650,7 +695,7 @@ export default function IngestionPage() {
                       type="button"
                       className="btn btn-primary"
                       disabled={source.status === 'running' || triggerMutation.isPending}
-                      onClick={() => handleTriggerSource(source.source)}
+                      onClick={() => handleTriggerSource(sourceKey)}
                     >
                       {source.status === 'running' ? 'Running...' : 'Run Full Ingestion'}
                     </button>
@@ -793,8 +838,8 @@ export default function IngestionPage() {
               >
                 <option value="">All Sources</option>
                 {enabledSources.map((s) => (
-                  <option key={s.source} value={s.source}>
-                    {SOURCE_LABELS[s.source] ?? s.source}
+                  <option key={s.source ?? 'unknown'} value={s.source ?? ''}>
+                    {SOURCE_LABELS[s.source ?? ''] ?? s.source ?? ''}
                   </option>
                 ))}
               </select>
@@ -828,15 +873,15 @@ export default function IngestionPage() {
                     {runsData.runs.map((run: IngestionRun) => (
                       <>
                         <tr
-                          key={run.run_id}
+                          key={run.run_id ?? 'unknown'}
                           className="history-row"
-                          onClick={() => setExpandedRunId(expandedRunId === run.run_id ? null : run.run_id)}
+                          onClick={() => setExpandedRunId(expandedRunId === run.run_id ? null : (run.run_id ?? null))}
                         >
-                          <td><strong>{SOURCE_LABELS[run.source] ?? run.source}</strong></td>
+                          <td><strong>{SOURCE_LABELS[run.source ?? ''] ?? run.source ?? ''}</strong></td>
                           <td>
                             <span className={
-                              run.status === 'completed' ? 'text-success'
-                                : run.status === 'failed' ? 'text-danger'
+                              run.status === 'COMPLETED' ? 'text-success'
+                                : run.status === 'FAILED' ? 'text-danger'
                                 : ''
                             }>
                               {run.status}
@@ -844,9 +889,9 @@ export default function IngestionPage() {
                           </td>
                           <td>{run.started_at ? new Date(run.started_at).toLocaleString() : '\u2014'}</td>
                           <td>{run.completed_at ? new Date(run.completed_at).toLocaleString() : '\u2014'}</td>
-                          <td>{run.records_processed}</td>
-                          <td>{run.records_created}</td>
-                          <td>{run.errors.length}</td>
+                          <td>{run.records_processed ?? 0}</td>
+                          <td>{run.records_created ?? 0}</td>
+                          <td>{run.errors?.length ?? 0}</td>
                         </tr>
                         {expandedRunId === run.run_id && (
                           <tr key={`${run.run_id}-detail`}>
@@ -854,10 +899,10 @@ export default function IngestionPage() {
                               <div className="run-detail">
                                 <div className="run-detail-grid">
                                   <div><strong>Run ID:</strong> {run.run_id}</div>
-                                  <div><strong>Records Updated:</strong> {run.records_updated}</div>
-                                  <div><strong>Duplicates Found:</strong> {run.duplicates_found}</div>
+                                  <div><strong>Records Updated:</strong> {run.records_updated ?? 0}</div>
+                                  <div><strong>Duplicates Found:</strong> {run.duplicates_found ?? 0}</div>
                                 </div>
-                                {run.errors.length > 0 && (
+                                {run.errors && run.errors.length > 0 && (
                                   <div className="run-errors">
                                     <strong>Errors:</strong>
                                     <ul>

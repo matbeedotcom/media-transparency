@@ -17,16 +17,96 @@ import {
   detectFundingClusters,
   detectInfrastructureSharing,
   explainFinding,
+  customInstance,
   type EntitySummary,
   type TemporalAnalysisResponse,
   type CompositeScoreResponse,
   type FundingClusterDetectionResponse,
   type InfrastructureSharingResponse,
   type FindingExplanation,
-} from '../services/api';
+  type EntityType,
+} from '@/api';
+
+// API call for politically active funded entities (not yet in generated types)
+const detectPoliticallyActiveFunded = (data: {
+  jurisdiction?: string;
+  min_funding?: number;
+  fiscal_year?: number | null;
+  include_lobbying?: boolean;
+  include_political_ads?: boolean;
+  limit?: number;
+}) => customInstance<PoliticallyActiveFundedResponse>({
+  url: '/detection/politically-active-funded',
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  data,
+});
+
+// Type definitions for detection result arrays (OpenAPI schema has incomplete types)
+interface LeadLagPair {
+  leader_entity_id?: string;
+  follower_entity_id?: string;
+  lag_minutes?: number;
+  correlation?: number;
+  is_significant?: boolean;
+}
+
+interface SynchronizedGroup {
+  sync_score?: number;
+  js_divergence?: number;
+  overlap_ratio?: number;
+  confidence?: number;
+  entity_ids?: string[];
+}
+
+interface FundingCluster {
+  cluster_id?: string;
+  shared_funder?: { name?: string };
+  members?: Array<{ id?: string; name?: string }>;
+  total_funding?: number;
+  score?: number;
+}
+
+interface InfraMatch {
+  domain_a?: string;
+  domain_b?: string;
+  signals?: Array<{ signal_type?: string; value?: string; weight?: number; description?: string }>;
+  total_score?: number;
+  confidence?: number;
+}
+
+interface InfraProfile {
+  domain?: string;
+  error?: string;
+  dns?: { nameservers?: string[] };
+  whois?: { registrar?: string };
+  ssl?: { issuer?: string };
+  hosting?: Array<{ provider?: string; ip?: string }>;
+}
+
+interface PoliticallyActiveFundedResult {
+  entity_id?: string;
+  entity_name?: string;
+  entity_type?: string;
+  jurisdiction?: string;
+  total_funding?: number;
+  funder_count?: number;
+  funders?: Array<{ id?: string; name?: string; jurisdiction?: string; amount?: number }>;
+  has_political_ads?: boolean;
+  political_ad_count?: number;
+  political_ad_spend?: number;
+  has_lobbying?: boolean;
+  lobbying_count?: number;
+}
+
+interface PoliticallyActiveFundedResponse {
+  results?: PoliticallyActiveFundedResult[];
+  total_results?: number;
+  explanation?: string;
+}
 
 export default function DetectionResults() {
-  const [activeTab, setActiveTab] = useState<'temporal' | 'funding' | 'infrastructure' | 'composite'>('temporal');
+  const [activeTab, setActiveTab] = useState<'temporal' | 'funding' | 'political' | 'infrastructure' | 'composite'>('temporal');
 
   // Temporal analysis form state
   const [selectedEntities, setSelectedEntities] = useState<EntitySummary[]>([]);
@@ -43,8 +123,17 @@ export default function DetectionResults() {
   // Funding cluster form state
   const [fundingEntityType, setFundingEntityType] = useState<string>('');
   const [fundingFiscalYear, setFundingFiscalYear] = useState<number>(new Date().getFullYear() - 1);
+  const [fundingCanadianOnly, setFundingCanadianOnly] = useState<boolean>(true);
   const [fundingMinShared, setFundingMinShared] = useState<number>(2);
   const [fundingResult, setFundingResult] = useState<FundingClusterDetectionResponse | null>(null);
+
+  // Politically active funded form state
+  const [politicalJurisdiction, setPoliticalJurisdiction] = useState<string>('CA');
+  const [politicalMinFunding, setPoliticalMinFunding] = useState<number>(1000);
+  const [politicalFiscalYear, setPoliticalFiscalYear] = useState<number | null>(null);
+  const [politicalIncludeAds, setPoliticalIncludeAds] = useState<boolean>(true);
+  const [politicalIncludeLobby, setPoliticalIncludeLobby] = useState<boolean>(true);
+  const [politicalResult, setPoliticalResult] = useState<PoliticallyActiveFundedResponse | null>(null);
 
   // Infrastructure sharing form state
   const [infraDomains, setInfraDomains] = useState<string>('');
@@ -70,7 +159,8 @@ export default function DetectionResults() {
 
   // Temporal analysis mutation
   const temporalAnalysis = useMutation({
-    mutationFn: analyzeTemporalCoordination,
+    mutationFn: (data: Parameters<typeof analyzeTemporalCoordination>[0]) => 
+      analyzeTemporalCoordination(data),
     onSuccess: (data) => {
       setAnalysisResult(data);
     },
@@ -78,15 +168,26 @@ export default function DetectionResults() {
 
   // Funding cluster mutation
   const fundingAnalysis = useMutation({
-    mutationFn: detectFundingClusters,
+    mutationFn: (data: Parameters<typeof detectFundingClusters>[0]) => 
+      detectFundingClusters(data),
     onSuccess: (data) => {
       setFundingResult(data);
     },
   });
 
+  // Politically active funded mutation
+  const politicalAnalysis = useMutation({
+    mutationFn: (data: Parameters<typeof detectPoliticallyActiveFunded>[0]) =>
+      detectPoliticallyActiveFunded(data),
+    onSuccess: (data) => {
+      setPoliticalResult(data);
+    },
+  });
+
   // Infrastructure sharing mutation
   const infraAnalysis = useMutation({
-    mutationFn: detectInfrastructureSharing,
+    mutationFn: (data: Parameters<typeof detectInfrastructureSharing>[0]) => 
+      detectInfrastructureSharing(data),
     onSuccess: (data) => {
       setInfraResult(data);
     },
@@ -94,7 +195,8 @@ export default function DetectionResults() {
 
   // Composite scoring mutation
   const compositeAnalysis = useMutation({
-    mutationFn: calculateCompositeScore,
+    mutationFn: (data: Parameters<typeof calculateCompositeScore>[0]) => 
+      calculateCompositeScore(data),
     onSuccess: (data) => {
       setCompositeResult(data);
       setShowExplanation(false);
@@ -145,12 +247,24 @@ export default function DetectionResults() {
 
   const handleRunFunding = useCallback(() => {
     fundingAnalysis.mutate({
-      entity_type: fundingEntityType || undefined,
+      entity_type: (fundingEntityType || undefined) as EntityType | undefined,
       fiscal_year: fundingFiscalYear || undefined,
+      jurisdiction: fundingCanadianOnly ? 'CA' : undefined,
       min_shared_funders: fundingMinShared,
       limit: 50,
     });
-  }, [fundingEntityType, fundingFiscalYear, fundingMinShared, fundingAnalysis]);
+  }, [fundingEntityType, fundingFiscalYear, fundingCanadianOnly, fundingMinShared, fundingAnalysis]);
+
+  const handleRunPolitical = useCallback(() => {
+    politicalAnalysis.mutate({
+      jurisdiction: politicalJurisdiction || undefined,
+      min_funding: politicalMinFunding,
+      fiscal_year: politicalFiscalYear || undefined,
+      include_political_ads: politicalIncludeAds,
+      include_lobbying: politicalIncludeLobby,
+      limit: 100,
+    });
+  }, [politicalJurisdiction, politicalMinFunding, politicalFiscalYear, politicalIncludeAds, politicalIncludeLobby, politicalAnalysis]);
 
   const handleRunInfra = useCallback(() => {
     const domains = infraDomains.split(/[,\s]+/).filter(Boolean);
@@ -191,24 +305,24 @@ export default function DetectionResults() {
   }, [selectedEntities, startDate, endDate, excludeHardNegatives, temporalAnalysis]);
 
   // Transform analysis results for timeline
-  const timelineEvents: TimelineEvent[] = analysisResult?.bursts.flatMap((burst) =>
-    burst.bursts.map((b, i) => ({
-      id: `${burst.entity_id}-burst-${i}`,
-      entityId: burst.entity_id,
-      entityName: selectedEntities.find((e) => e.id === burst.entity_id)?.name || burst.entity_id,
+  const timelineEvents: TimelineEvent[] = (analysisResult?.bursts ?? []).flatMap((burst) =>
+    ((burst as { bursts?: Array<{ startTime: string; endTime: string; intensity?: number; eventCount: number }> }).bursts ?? []).map((b, i) => ({
+      id: `${(burst as { entity_id?: string }).entity_id ?? 'unknown'}-burst-${i}`,
+      entityId: (burst as { entity_id?: string }).entity_id ?? 'unknown',
+      entityName: selectedEntities.find((e) => e.id === (burst as { entity_id?: string }).entity_id)?.name ?? (burst as { entity_id?: string }).entity_id ?? 'Unknown',
       timestamp: b.startTime,
-      eventType: 'BURST',
+      eventType: 'BURST' as const,
     }))
-  ) || [];
+  );
 
-  const timelineBursts: BurstPeriod[] = analysisResult?.bursts.flatMap((burst) =>
-    burst.bursts.map((b) => ({
+  const timelineBursts: BurstPeriod[] = (analysisResult?.bursts ?? []).flatMap((burst) =>
+    ((burst as { bursts?: Array<{ startTime: string; endTime: string; intensity?: number; eventCount: number }> }).bursts ?? []).map((b) => ({
       startTime: b.startTime,
       endTime: b.endTime,
       level: b.intensity ?? b.eventCount,
       eventCount: b.eventCount,
     }))
-  ) || [];
+  );
 
   // Calculate score color
   const getScoreColor = (score: number) => {
@@ -238,6 +352,12 @@ export default function DetectionResults() {
           onClick={() => setActiveTab('funding')}
         >
           Funding Clusters
+        </button>
+        <button
+          className={`tab ${activeTab === 'political' ? 'active' : ''}`}
+          onClick={() => setActiveTab('political')}
+        >
+          Political Activity
         </button>
         <button
           className={`tab ${activeTab === 'infrastructure' ? 'active' : ''}`}
@@ -365,22 +485,22 @@ export default function DetectionResults() {
                 <div className="summary-stat">
                   <div
                     className="stat-value coordination-score"
-                    style={{ color: getScoreColor(analysisResult.coordination_score) }}
+                    style={{ color: getScoreColor(analysisResult.coordination_score ?? 0) }}
                   >
-                    {(analysisResult.coordination_score * 100).toFixed(1)}%
+                    {((analysisResult.coordination_score ?? 0) * 100).toFixed(1)}%
                   </div>
                   <div className="stat-label">Coordination Score</div>
                 </div>
                 <div className="summary-stat">
-                  <div className="stat-value">{analysisResult.entity_count}</div>
+                  <div className="stat-value">{analysisResult.entity_count ?? 0}</div>
                   <div className="stat-label">Entities Analyzed</div>
                 </div>
                 <div className="summary-stat">
-                  <div className="stat-value">{analysisResult.event_count}</div>
+                  <div className="stat-value">{analysisResult.event_count ?? 0}</div>
                   <div className="stat-label">Events Processed</div>
                 </div>
                 <div className="summary-stat">
-                  <div className="stat-value">{analysisResult.hard_negatives_filtered}</div>
+                  <div className="stat-value">{analysisResult.hard_negatives_filtered ?? 0}</div>
                   <div className="stat-label">Hard Negatives Filtered</div>
                 </div>
               </div>
@@ -417,7 +537,7 @@ export default function DetectionResults() {
               )}
 
               {/* Lead-lag pairs */}
-              {analysisResult.lead_lag_pairs.length > 0 && (
+              {(analysisResult.lead_lag_pairs?.length ?? 0) > 0 && (
                 <div className="results-section">
                   <h4>Lead-Lag Relationships</h4>
                   <table className="results-table">
@@ -431,18 +551,18 @@ export default function DetectionResults() {
                       </tr>
                     </thead>
                     <tbody>
-                      {analysisResult.lead_lag_pairs.map((pair, i) => (
+                      {((analysisResult.lead_lag_pairs ?? []) as LeadLagPair[]).map((pair, i) => (
                         <tr key={i}>
                           <td>
-                            {selectedEntities.find((e) => e.id === pair.leader_entity_id)?.name ||
-                              pair.leader_entity_id}
+                            {selectedEntities.find((e) => e.id === pair.leader_entity_id)?.name ??
+                              pair.leader_entity_id ?? 'Unknown'}
                           </td>
                           <td>
-                            {selectedEntities.find((e) => e.id === pair.follower_entity_id)?.name ||
-                              pair.follower_entity_id}
+                            {selectedEntities.find((e) => e.id === pair.follower_entity_id)?.name ??
+                              pair.follower_entity_id ?? 'Unknown'}
                           </td>
-                          <td>{pair.lag_minutes}</td>
-                          <td>{pair.correlation.toFixed(3)}</td>
+                          <td>{pair.lag_minutes ?? 0}</td>
+                          <td>{(pair.correlation ?? 0).toFixed(3)}</td>
                           <td>
                             <span className={`badge ${pair.is_significant ? 'badge-warning' : 'badge-muted'}`}>
                               {pair.is_significant ? 'Yes' : 'No'}
@@ -456,23 +576,23 @@ export default function DetectionResults() {
               )}
 
               {/* Synchronized groups */}
-              {analysisResult.synchronized_groups.length > 0 && (
+              {(analysisResult.synchronized_groups?.length ?? 0) > 0 && (
                 <div className="results-section">
                   <h4>Synchronization Analysis</h4>
-                  {analysisResult.synchronized_groups.map((group, i) => (
+                  {((analysisResult.synchronized_groups ?? []) as SynchronizedGroup[]).map((group, i) => (
                     <div key={i} className="sync-group-card">
                       <div className="sync-score">
-                        Sync Score: <strong>{(group.sync_score * 100).toFixed(1)}%</strong>
+                        Sync Score: <strong>{((group.sync_score ?? 0) * 100).toFixed(1)}%</strong>
                       </div>
                       <div className="sync-details">
-                        <span>JS Divergence: {group.js_divergence.toFixed(4)}</span>
-                        <span>Overlap: {(group.overlap_ratio * 100).toFixed(1)}%</span>
-                        <span>Confidence: {(group.confidence * 100).toFixed(1)}%</span>
+                        <span>JS Divergence: {(group.js_divergence ?? 0).toFixed(4)}</span>
+                        <span>Overlap: {((group.overlap_ratio ?? 0) * 100).toFixed(1)}%</span>
+                        <span>Confidence: {((group.confidence ?? 0) * 100).toFixed(1)}%</span>
                       </div>
                       <div className="sync-entities">
-                        {group.entity_ids.map((eid) => (
+                        {(group.entity_ids ?? []).map((eid) => (
                           <span key={eid} className="entity-chip small">
-                            {selectedEntities.find((e) => e.id === eid)?.name || eid}
+                            {selectedEntities.find((e) => e.id === eid)?.name ?? eid}
                           </span>
                         ))}
                       </div>
@@ -542,6 +662,17 @@ export default function DetectionResults() {
                 </div>
               </div>
 
+              <div className="form-group">
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={fundingCanadianOnly}
+                    onChange={(e) => setFundingCanadianOnly(e.target.checked)}
+                  />
+                  Canadian entities only (companies & non-profits)
+                </label>
+              </div>
+
               <button
                 type="submit"
                 className="btn btn-primary"
@@ -560,10 +691,10 @@ export default function DetectionResults() {
 
           {fundingResult && (
             <div className="card mt-md">
-              <h3>Funding Clusters ({fundingResult.total_clusters})</h3>
-              <p className="explanation">{fundingResult.explanation}</p>
+              <h3>Funding Clusters ({fundingResult.total_clusters ?? 0})</h3>
+              <p className="explanation">{fundingResult.explanation ?? ''}</p>
 
-              {fundingResult.clusters.length > 0 ? (
+              {(fundingResult.clusters?.length ?? 0) > 0 ? (
                 <div className="results-section">
                   <table className="results-table">
                     <thead>
@@ -575,25 +706,25 @@ export default function DetectionResults() {
                       </tr>
                     </thead>
                     <tbody>
-                      {fundingResult.clusters.map((cluster) => (
-                        <tr key={cluster.cluster_id}>
-                          <td>{cluster.shared_funder?.name || 'Unknown'}</td>
+                      {((fundingResult.clusters ?? []) as FundingCluster[]).map((cluster, idx) => (
+                        <tr key={cluster.cluster_id ?? idx}>
+                          <td>{cluster.shared_funder?.name ?? 'Unknown'}</td>
                           <td>
                             <div className="selected-entities">
-                              {cluster.members.map((m, i) => (
-                                <span key={i} className="entity-chip small">
-                                  {m.name || 'Unknown'}
+                              {(cluster.members ?? []).map((m, i) => (
+                                <span key={m.id ?? i} className="entity-chip small">
+                                  {m.name ?? 'Unknown'}
                                 </span>
                               ))}
                             </div>
                           </td>
-                          <td>${cluster.total_funding.toLocaleString()}</td>
+                          <td>${(cluster.total_funding ?? 0).toLocaleString()}</td>
                           <td>
                             <span
                               className="stat-value"
-                              style={{ color: getScoreColor(cluster.score), fontSize: '1rem' }}
+                              style={{ color: getScoreColor(cluster.score ?? 0), fontSize: '1rem' }}
                             >
-                              {(cluster.score * 100).toFixed(1)}%
+                              {((cluster.score ?? 0) * 100).toFixed(1)}%
                             </span>
                           </td>
                         </tr>
@@ -616,6 +747,179 @@ export default function DetectionResults() {
                 <p>No results yet.</p>
                 <p className="text-muted">
                   Configure and run a funding cluster search above.
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Politically Active Funded Tab */}
+      {activeTab === 'political' && (
+        <div className="detection-panel">
+          <div className="card">
+            <h2>Politically Active Funded Entities</h2>
+            <p className="text-muted mb-md">
+              Find organizations that receive funding AND engage in political activity
+              (political ads, lobbying). Helps identify potential influence campaigns.
+            </p>
+
+            <form className="analysis-form" onSubmit={(e) => { e.preventDefault(); handleRunPolitical(); }}>
+              <div className="form-row">
+                <div className="form-group">
+                  <label>Recipient Jurisdiction</label>
+                  <select
+                    value={politicalJurisdiction}
+                    onChange={(e) => setPoliticalJurisdiction(e.target.value)}
+                  >
+                    <option value="CA">Canada</option>
+                    <option value="US">United States</option>
+                    <option value="">All</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>Minimum Total Funding ($)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={politicalMinFunding}
+                    onChange={(e) => setPoliticalMinFunding(parseInt(e.target.value) || 0)}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Fiscal Year (optional)</label>
+                  <input
+                    type="number"
+                    min="2000"
+                    max="2030"
+                    placeholder="Any year"
+                    value={politicalFiscalYear ?? ''}
+                    onChange={(e) => setPoliticalFiscalYear(e.target.value ? parseInt(e.target.value) : null)}
+                  />
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label>Include Activity Types</label>
+                <div className="checkbox-row">
+                  <label className="checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={politicalIncludeAds}
+                      onChange={(e) => setPoliticalIncludeAds(e.target.checked)}
+                    />
+                    Political Ads (Meta)
+                  </label>
+                  <label className="checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={politicalIncludeLobby}
+                      onChange={(e) => setPoliticalIncludeLobby(e.target.checked)}
+                    />
+                    Lobbying Activity
+                  </label>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={politicalAnalysis.isPending}
+              >
+                {politicalAnalysis.isPending ? 'Searching...' : 'Find Politically Active Entities'}
+              </button>
+
+              {politicalAnalysis.isError && (
+                <div className="error-message">
+                  Error: {(politicalAnalysis.error as Error).message}
+                </div>
+              )}
+            </form>
+          </div>
+
+          {politicalResult && (
+            <div className="card mt-md">
+              <h3>Results ({politicalResult.total_results ?? 0} entities)</h3>
+              <p className="explanation">{politicalResult.explanation ?? ''}</p>
+
+              {(politicalResult.results?.length ?? 0) > 0 ? (
+                <div className="results-section">
+                  <table className="results-table">
+                    <thead>
+                      <tr>
+                        <th>Entity</th>
+                        <th>Jurisdiction</th>
+                        <th>Total Funding</th>
+                        <th>Funders</th>
+                        <th>Political Ads</th>
+                        <th>Ad Spend</th>
+                        <th>Lobbying</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(politicalResult.results ?? []).map((result, idx) => (
+                        <tr key={result.entity_id ?? idx}>
+                          <td>
+                            <strong>{result.entity_name ?? 'Unknown'}</strong>
+                            <br />
+                            <small className="text-muted">{result.entity_type ?? ''}</small>
+                          </td>
+                          <td>{result.jurisdiction ?? '-'}</td>
+                          <td>${(result.total_funding ?? 0).toLocaleString()}</td>
+                          <td>
+                            <span className="badge badge-muted">{result.funder_count ?? 0}</span>
+                            {(result.funders?.length ?? 0) > 0 && (
+                              <div className="selected-entities" style={{ marginTop: '4px' }}>
+                                {(result.funders ?? []).slice(0, 3).map((f, i) => (
+                                  <span key={i} className="entity-chip small" title={`$${(f.amount ?? 0).toLocaleString()}`}>
+                                    {f.name ?? 'Unknown'}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </td>
+                          <td>
+                            {result.has_political_ads ? (
+                              <span className="badge badge-warning">{result.political_ad_count ?? 0} ads</span>
+                            ) : (
+                              <span className="text-muted">-</span>
+                            )}
+                          </td>
+                          <td>
+                            {result.has_political_ads ? (
+                              <span>${(result.political_ad_spend ?? 0).toLocaleString()}</span>
+                            ) : (
+                              <span className="text-muted">-</span>
+                            )}
+                          </td>
+                          <td>
+                            {result.has_lobbying ? (
+                              <span className="badge badge-warning">{result.lobbying_count ?? 0}</span>
+                            ) : (
+                              <span className="text-muted">-</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="empty-state">
+                  <p>No politically active funded entities found matching the criteria.</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {!politicalResult && !politicalAnalysis.isPending && (
+            <div className="card mt-md">
+              <h3>Politically Active Funded Entities</h3>
+              <div className="empty-state">
+                <p>No results yet.</p>
+                <p className="text-muted">
+                  Configure and run a search above to find entities that receive funding
+                  and engage in political activity.
                 </p>
               </div>
             </div>
@@ -679,29 +983,29 @@ export default function DetectionResults() {
           {infraResult && (
             <div className="card mt-md">
               <h3>Infrastructure Results</h3>
-              <p className="explanation">{infraResult.explanation}</p>
+              <p className="explanation">{infraResult.explanation ?? ''}</p>
 
-              {infraResult.errors.length > 0 && (
+              {(infraResult.errors?.length ?? 0) > 0 && (
                 <div className="error-message" style={{ marginTop: 'var(--spacing-sm)' }}>
-                  {infraResult.errors.map((err, i) => (
-                    <div key={i}>{err}</div>
+                  {(infraResult.errors ?? []).map((err, i) => (
+                    <div key={i}>{String(err)}</div>
                   ))}
                 </div>
               )}
 
               <div className="results-summary">
                 <div className="summary-stat">
-                  <div className="stat-value">{infraResult.domains_scanned}</div>
+                  <div className="stat-value">{infraResult.domains_scanned ?? 0}</div>
                   <div className="stat-label">Domains Scanned</div>
                 </div>
                 <div className="summary-stat">
-                  <div className="stat-value">{infraResult.total_matches}</div>
+                  <div className="stat-value">{infraResult.total_matches ?? 0}</div>
                   <div className="stat-label">Matches Found</div>
                 </div>
               </div>
 
               {/* Pairwise Matches */}
-              {infraResult.matches.length > 0 && (
+              {(infraResult.matches?.length ?? 0) > 0 && (
                 <div className="results-section">
                   <h4>Pairwise Matches</h4>
                   <table className="results-table">
@@ -715,28 +1019,28 @@ export default function DetectionResults() {
                       </tr>
                     </thead>
                     <tbody>
-                      {infraResult.matches.map((match, i) => (
+                      {((infraResult.matches ?? []) as InfraMatch[]).map((match, i) => (
                         <tr key={i}>
-                          <td>{match.domain_a}</td>
-                          <td>{match.domain_b}</td>
+                          <td>{match.domain_a ?? 'Unknown'}</td>
+                          <td>{match.domain_b ?? 'Unknown'}</td>
                           <td>
                             <div className="selected-entities">
-                              {match.signals.map((sig, j) => (
+                              {(match.signals ?? []).map((sig, j) => (
                                 <span
                                   key={j}
                                   className="entity-chip small"
-                                  title={sig.description}
+                                  title={sig.description ?? ''}
                                   style={{
-                                    background: sig.weight >= 3 ? '#DC2626' : sig.weight >= 2 ? '#F59E0B' : 'var(--color-primary)',
+                                    background: (sig.weight ?? 0) >= 3 ? '#DC2626' : (sig.weight ?? 0) >= 2 ? '#F59E0B' : 'var(--color-primary)',
                                   }}
                                 >
-                                  {sig.signal_type}: {sig.value}
+                                  {sig.signal_type ?? 'unknown'}: {sig.value ?? ''}
                                 </span>
                               ))}
                             </div>
                           </td>
-                          <td>{match.total_score.toFixed(1)}</td>
-                          <td>{(match.confidence * 100).toFixed(0)}%</td>
+                          <td>{(match.total_score ?? 0).toFixed(1)}</td>
+                          <td>{((match.confidence ?? 0) * 100).toFixed(0)}%</td>
                         </tr>
                       ))}
                     </tbody>
@@ -745,13 +1049,13 @@ export default function DetectionResults() {
               )}
 
               {/* Domain Profiles */}
-              {infraResult.profiles.length > 0 && (
+              {(infraResult.profiles?.length ?? 0) > 0 && (
                 <div className="results-section">
                   <h4>Domain Profiles</h4>
-                  {infraResult.profiles.map((profile, i) => (
+                  {((infraResult.profiles ?? []) as InfraProfile[]).map((profile, i) => (
                     <div key={i} className="sync-group-card">
                       <div className="sync-score">
-                        <strong>{profile.domain}</strong>
+                        <strong>{profile.domain ?? 'Unknown'}</strong>
                         {profile.error && (
                           <span className="badge badge-warning" style={{ marginLeft: '8px' }}>
                             Error: {profile.error}
@@ -760,7 +1064,7 @@ export default function DetectionResults() {
                       </div>
                       <div className="sync-details">
                         {profile.dns && (
-                          <span>NS: {profile.dns.nameservers?.join(', ') || 'N/A'}</span>
+                          <span>NS: {profile.dns.nameservers?.join(', ') ?? 'N/A'}</span>
                         )}
                         {profile.whois?.registrar && (
                           <span>Registrar: {profile.whois.registrar}</span>
@@ -770,7 +1074,7 @@ export default function DetectionResults() {
                         )}
                         {profile.hosting && profile.hosting.length > 0 && (
                           <span>
-                            Hosting: {profile.hosting.map((h) => h.provider || h.ip).join(', ')}
+                            Hosting: {profile.hosting.map((h) => h.provider ?? h.ip ?? 'Unknown').join(', ')}
                           </span>
                         )}
                       </div>
@@ -779,7 +1083,7 @@ export default function DetectionResults() {
                 </div>
               )}
 
-              {infraResult.matches.length === 0 && (
+              {(infraResult.matches?.length ?? 0) === 0 && (
                 <div className="empty-state">
                   <p>No shared infrastructure detected above the minimum score.</p>
                 </div>
@@ -913,18 +1217,18 @@ export default function DetectionResults() {
                 <div className="composite-main-score">
                   <div
                     className="stat-value coordination-score"
-                    style={{ color: getScoreColor(compositeResult.overall_score) }}
+                    style={{ color: getScoreColor(compositeResult.overall_score ?? 0) }}
                   >
-                    {(compositeResult.overall_score * 100).toFixed(1)}%
+                    {((compositeResult.overall_score ?? 0) * 100).toFixed(1)}%
                   </div>
                   <div className="stat-label">Overall Score</div>
                 </div>
                 <div className="composite-main-score">
                   <div
                     className="stat-value coordination-score"
-                    style={{ color: getScoreColor(compositeResult.adjusted_score) }}
+                    style={{ color: getScoreColor(compositeResult.adjusted_score ?? 0) }}
                   >
-                    {(compositeResult.adjusted_score * 100).toFixed(1)}%
+                    {((compositeResult.adjusted_score ?? 0) * 100).toFixed(1)}%
                   </div>
                   <div className="stat-label">Adjusted Score</div>
                 </div>
@@ -935,7 +1239,7 @@ export default function DetectionResults() {
                 {compositeResult.flagged ? (
                   <>
                     <span className="indicator-icon">!</span>
-                    <span>Flagged: {compositeResult.flag_reason}</span>
+                    <span>Flagged: {compositeResult.flag_reason ?? 'Unknown reason'}</span>
                   </>
                 ) : (
                   <>
@@ -1015,7 +1319,7 @@ export default function DetectionResults() {
                         />
                         <div
                           className="confidence-bar-marker"
-                          style={{ left: `${compositeResult.overall_score * 100}%` }}
+                          style={{ left: `${(compositeResult.overall_score ?? 0) * 100}%` }}
                         />
                       </div>
                       <span className="confidence-upper">

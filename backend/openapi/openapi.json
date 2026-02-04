@@ -1,0 +1,6500 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "MITDS API",
+    "version": "1.0.0",
+    "description": "# Media Influence Topology & Detection System (MITDS)\n\nMITDS exposes a REST API for investigating connections between media outlets,\norganizations, and their funding sources. The system detects potential coordinated\ninfluence campaigns through analysis of funding patterns, shared infrastructure,\nand temporal coordination.\n\n## Core Capabilities\n\n### Entity Management\n- Search and retrieve organizations, persons, outlets, and sponsors\n- View entity relationships and evidence chains\n- Track changes over time with temporal queries\n\n### Funding Analysis\n- Discover funding paths between entities\n- Detect clusters of entities sharing common funders\n- Analyze funding concentration and patterns\n\n### Detection Services\n- Temporal coordination detection\n- Infrastructure sharing analysis\n- Composite influence scoring\n\n### Data Ingestion\n- IRS 990 filings (US nonprofits)\n- CRA T3010 filings (Canadian charities)\n- SEC EDGAR company filings\n- SEDAR+ Canadian securities filings\n- Provincial corporate registries\n- Meta Ad Library\n\n## Authentication\n\nMost endpoints require JWT authentication. Include the token in the Authorization header:\n\n```\nAuthorization: Bearer <your-token>\n```\n\nPublic endpoints (health, documentation) don't require authentication.\n\n## Rate Limits\n\n- Default: 100 requests/minute\n- Search endpoints: 30 requests/minute\n- Detection endpoints: 10 requests/minute\n\nRate limit headers are included in all responses:\n- `X-RateLimit-Limit`: Maximum requests allowed\n- `X-RateLimit-Remaining`: Requests remaining\n- `X-RateLimit-Reset`: Seconds until limit resets\n",
+    "contact": {
+      "name": "MITDS Team",
+      "url": "https://github.com/mitds/mitds"
+    },
+    "license": {
+      "name": "MIT",
+      "url": "https://opensource.org/licenses/MIT"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8000",
+      "description": "Local development server"
+    },
+    {
+      "url": "/",
+      "description": "Current server"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Entities",
+      "description": "Entity search, retrieval, and management operations. Access organizations, persons, outlets, sponsors, and other entities in the knowledge graph."
+    },
+    {
+      "name": "Relationships",
+      "description": "Relationship queries including funding paths, board interlocks, shared funders, and infrastructure connections between entities."
+    },
+    {
+      "name": "Detection",
+      "description": "Detection algorithms for identifying coordination patterns, funding clusters, and shared infrastructure indicative of influence campaigns."
+    },
+    {
+      "name": "Ingestion",
+      "description": "Data ingestion from external sources including IRS 990, CRA, SEC EDGAR, SEDAR, provincial registries, Meta Ads, LinkedIn, and more."
+    },
+    {
+      "name": "Reports",
+      "description": "Generate and export investigation reports with customizable templates and multiple output formats."
+    },
+    {
+      "name": "Jobs",
+      "description": "Background job management for long-running operations like detection analysis and report generation."
+    },
+    {
+      "name": "Validation",
+      "description": "Data validation framework for testing detection algorithms against golden datasets and synthetic test cases."
+    },
+    {
+      "name": "Resolution",
+      "description": "Entity resolution and reconciliation for merging duplicate entities and resolving cross-border matches."
+    },
+    {
+      "name": "Settings",
+      "description": "System settings, connection status, and data source configuration."
+    },
+    {
+      "name": "Research",
+      "description": "Research session management for automated entity discovery and relationship exploration."
+    },
+    {
+      "name": "Cases",
+      "description": "Case management for autonomous investigations starting from entry points like Meta Ads, corporations, or URLs."
+    },
+    {
+      "name": "Meta OAuth",
+      "description": "Meta (Facebook) OAuth authentication for accessing the Meta Ad Library API."
+    },
+    {
+      "name": "Health",
+      "description": "Health check endpoints for monitoring service status and readiness."
+    },
+    {
+      "name": "Root",
+      "description": "Root operations"
+    },
+    {
+      "name": "cases",
+      "description": "cases operations"
+    },
+    {
+      "name": "research",
+      "description": "research operations"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "Health Check",
+        "description": "Basic health check endpoint.",
+        "operationId": "health_check_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "Readiness Check",
+        "description": "Readiness check that verifies database connectivity.",
+        "operationId": "readiness_check_health_ready_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/live": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "Liveness Check",
+        "description": "Liveness check - just confirms the service is running.",
+        "operationId": "liveness_check_health_live_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/": {
+      "get": {
+        "tags": [
+          "Root"
+        ],
+        "summary": "Root",
+        "description": "API root endpoint.",
+        "operationId": "root__get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/entities": {
+      "get": {
+        "tags": [
+          "Entities"
+        ],
+        "summary": "Search Entities",
+        "description": "Search for entities by name, alias, or identifier.\n\nSupports searching across:\n- Organization names and aliases\n- Person names\n- Outlet names and domains\n- EIN, BN, and other identifiers",
+        "operationId": "search_entities_entities_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Search query",
+              "title": "Q"
+            },
+            "description": "Search query"
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/EntityType"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by entity type",
+              "title": "Type"
+            },
+            "description": "Filter by entity type"
+          },
+          {
+            "name": "jurisdiction",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by jurisdiction",
+              "title": "Jurisdiction"
+            },
+            "description": "Filter by jurisdiction"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/entities/{entity_id}": {
+      "get": {
+        "tags": [
+          "Entities"
+        ],
+        "summary": "Get Entity",
+        "description": "Get an entity by ID with full details.",
+        "operationId": "get_entity_entities__entity_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "entity_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Entity Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntityResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/entities/{entity_id}/relationships": {
+      "get": {
+        "tags": [
+          "Entities"
+        ],
+        "summary": "Get Entity Relationships",
+        "description": "Get relationships for an entity.\n\nReturns relationships with the related entity summary for each.",
+        "operationId": "get_entity_relationships_entities__entity_id__relationships_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "entity_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Entity Id"
+            }
+          },
+          {
+            "name": "rel_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by relationship type",
+              "title": "Rel Type"
+            },
+            "description": "Filter by relationship type"
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^(in|out|both)$",
+              "default": "both",
+              "title": "Direction"
+            }
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Point-in-time query (ISO 8601)",
+              "title": "As Of"
+            },
+            "description": "Point-in-time query (ISO 8601)"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/entities/{entity_id}/evidence": {
+      "get": {
+        "tags": [
+          "Entities"
+        ],
+        "summary": "Get Entity Evidence",
+        "description": "Get evidence for an entity.\n\nReturns all evidence records associated with this entity.",
+        "operationId": "get_entity_evidence_entities__entity_id__evidence_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "entity_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Entity Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/entities/{entity_id}/stats": {
+      "get": {
+        "tags": [
+          "Entities"
+        ],
+        "summary": "Get Entity Statistics",
+        "description": "Get statistics for an entity.\n\nReturns counts of relationships, funders, recipients, etc.",
+        "operationId": "get_entity_statistics_entities__entity_id__stats_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "entity_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Entity Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/entities/{entity_id}/board-interlocks": {
+      "get": {
+        "tags": [
+          "Entities"
+        ],
+        "summary": "Get Board Interlocks",
+        "description": "Get board interlocks for an organization.\n\nReturns directors of this entity who also serve on other boards,\nalong with those other organizations.",
+        "operationId": "get_board_interlocks_entities__entity_id__board_interlocks_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "entity_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Entity Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/relationships/path": {
+      "get": {
+        "tags": [
+          "Relationships"
+        ],
+        "summary": "Find Paths",
+        "description": "Find shortest path between two entities.\n\nArgs:\n    from_id: Source entity ID\n    to_id: Target entity ID\n    max_hops: Maximum path length\n    rel_types: Filter by relationship types (comma-separated)\n\nReturns:\n    Path with nodes and edges",
+        "operationId": "find_paths_relationships_path_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "from_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "From Id"
+            }
+          },
+          {
+            "name": "to_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "To Id"
+            }
+          },
+          {
+            "name": "max_hops",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 5,
+              "minimum": 1,
+              "default": 3,
+              "title": "Max Hops"
+            }
+          },
+          {
+            "name": "rel_types",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Comma-separated relationship types",
+              "title": "Rel Types"
+            },
+            "description": "Comma-separated relationship types"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FindPathResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/relationships/paths/all": {
+      "get": {
+        "tags": [
+          "Relationships"
+        ],
+        "summary": "Find All Entity Paths",
+        "description": "Find all paths between two entities.\n\nUnlike /path which returns only the shortest path, this endpoint\nreturns all distinct paths up to max_hops, revealing different\nrelationship types and intermediate connections.\n\nArgs:\n    from_id: Source entity ID\n    to_id: Target entity ID\n    max_hops: Maximum path length\n    rel_types: Filter by relationship types (comma-separated)\n    limit: Maximum number of paths to return\n\nReturns:\n    All paths with nodes and edges",
+        "operationId": "find_all_entity_paths_relationships_paths_all_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "from_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "From Id"
+            }
+          },
+          {
+            "name": "to_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "To Id"
+            }
+          },
+          {
+            "name": "max_hops",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 6,
+              "minimum": 1,
+              "default": 5,
+              "title": "Max Hops"
+            }
+          },
+          {
+            "name": "rel_types",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Comma-separated relationship types",
+              "title": "Rel Types"
+            },
+            "description": "Comma-separated relationship types"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 10,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AllPathsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/relationships/connecting-entities": {
+      "get": {
+        "tags": [
+          "Relationships"
+        ],
+        "summary": "Find Entity Connectors",
+        "description": "Find entities that connect multiple given entities.\n\nDiscovers hidden connections like shared directors,\nboard members, or intermediate organizations.\n\nArgs:\n    entity_ids: Comma-separated entity IDs (at least 2)\n    max_hops: Maximum distance from any given entity\n    rel_types: Filter by relationship types\n\nReturns:\n    List of connecting entities ordered by connectivity",
+        "operationId": "find_entity_connectors_relationships_connecting_entities_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "entity_ids",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Comma-separated entity IDs to find connections between",
+              "title": "Entity Ids"
+            },
+            "description": "Comma-separated entity IDs to find connections between"
+          },
+          {
+            "name": "max_hops",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 5,
+              "minimum": 1,
+              "default": 3,
+              "title": "Max Hops"
+            }
+          },
+          {
+            "name": "rel_types",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Comma-separated relationship types",
+              "title": "Rel Types"
+            },
+            "description": "Comma-separated relationship types"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectingEntitiesResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/relationships/graph-at-time/{entity_id}": {
+      "get": {
+        "tags": [
+          "Relationships"
+        ],
+        "summary": "Get Entity Graph At Time",
+        "description": "Get the state of relationships around an entity at a specific time.\n\nReturns only relationships that were valid at the given point in time,\nbased on their valid_from and valid_to properties.\n\nArgs:\n    entity_id: Central entity ID\n    as_of: Point in time for the snapshot (ISO format)\n    depth: How many hops to traverse\n    rel_types: Filter by relationship types\n\nReturns:\n    Entity snapshot with valid relationships at that time",
+        "operationId": "get_entity_graph_at_time_relationships_graph_at_time__entity_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "entity_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Entity Id"
+            }
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "description": "Point in time for the snapshot",
+              "title": "As Of"
+            },
+            "description": "Point in time for the snapshot"
+          },
+          {
+            "name": "depth",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 3,
+              "minimum": 1,
+              "default": 1,
+              "title": "Depth"
+            }
+          },
+          {
+            "name": "rel_types",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Comma-separated relationship types",
+              "title": "Rel Types"
+            },
+            "description": "Comma-separated relationship types"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphAtTimeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/relationships/changes": {
+      "get": {
+        "tags": [
+          "Relationships"
+        ],
+        "summary": "Get Relationship Changes",
+        "description": "Detect changes in relationships between two time points.\n\nCompares the graph state at from_date with to_date and identifies\nnew relationships, ended relationships, and modifications.\n\nArgs:\n    entity_id: Central entity ID\n    from_date: Start of comparison period\n    to_date: End of comparison period\n    rel_types: Filter by relationship types\n\nReturns:\n    Graph diff with detected changes",
+        "operationId": "get_relationship_changes_relationships_changes_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "entity_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Entity Id"
+            }
+          },
+          {
+            "name": "from_date",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "description": "Start of comparison period",
+              "title": "From Date"
+            },
+            "description": "Start of comparison period"
+          },
+          {
+            "name": "to_date",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "description": "End of comparison period",
+              "title": "To Date"
+            },
+            "description": "End of comparison period"
+          },
+          {
+            "name": "rel_types",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Comma-separated relationship types",
+              "title": "Rel Types"
+            },
+            "description": "Comma-separated relationship types"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RelationshipChangesResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/relationships/timeline": {
+      "get": {
+        "tags": [
+          "Relationships"
+        ],
+        "summary": "Get Entity Relationship Timeline",
+        "description": "Get the full timeline of relationships between two entities.\n\nShows all historical periods when a relationship existed,\nuseful for understanding the evolution of connections.\n\nArgs:\n    source_id: Source entity ID\n    target_id: Target entity ID\n    rel_type: Filter by relationship type\n\nReturns:\n    Timeline with all historical relationship periods",
+        "operationId": "get_entity_relationship_timeline_relationships_timeline_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Source Id"
+            }
+          },
+          {
+            "name": "target_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Target Id"
+            }
+          },
+          {
+            "name": "rel_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by relationship type",
+              "title": "Rel Type"
+            },
+            "description": "Filter by relationship type"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RelationshipTimelineResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/relationships/funding-paths/{funder_id}": {
+      "get": {
+        "tags": [
+          "Relationships"
+        ],
+        "summary": "Get Funder Paths",
+        "description": "Get all funding paths from a funder.\n\nReturns paths showing how funding flows from a funder\nto various recipients, including through intermediaries.",
+        "operationId": "get_funder_paths_relationships_funding_paths__funder_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "funder_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Funder Id"
+            }
+          },
+          {
+            "name": "max_hops",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 5,
+              "minimum": 1,
+              "default": 3,
+              "title": "Max Hops"
+            }
+          },
+          {
+            "name": "min_amount",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Minimum funding amount",
+              "title": "Min Amount"
+            },
+            "description": "Minimum funding amount"
+          },
+          {
+            "name": "fiscal_year",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by fiscal year",
+              "title": "Fiscal Year"
+            },
+            "description": "Filter by fiscal year"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FundingPathsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/relationships/funding-recipients/{funder_id}": {
+      "get": {
+        "tags": [
+          "Relationships"
+        ],
+        "summary": "Get Funder Recipients",
+        "description": "Get direct funding recipients of an entity.\n\nReturns all entities that have received funding directly\nfrom the specified funder.",
+        "operationId": "get_funder_recipients_relationships_funding_recipients__funder_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "funder_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Funder Id"
+            }
+          },
+          {
+            "name": "fiscal_year",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by fiscal year",
+              "title": "Fiscal Year"
+            },
+            "description": "Filter by fiscal year"
+          },
+          {
+            "name": "min_amount",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Minimum funding amount",
+              "title": "Min Amount"
+            },
+            "description": "Minimum funding amount"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FundingRecipientsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/relationships/funding-sources/{recipient_id}": {
+      "get": {
+        "tags": [
+          "Relationships"
+        ],
+        "summary": "Get Recipient Funders",
+        "description": "Get funding sources of an entity.\n\nReturns all entities that have provided funding directly\nto the specified recipient.",
+        "operationId": "get_recipient_funders_relationships_funding_sources__recipient_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "recipient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Recipient Id"
+            }
+          },
+          {
+            "name": "fiscal_year",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by fiscal year",
+              "title": "Fiscal Year"
+            },
+            "description": "Filter by fiscal year"
+          },
+          {
+            "name": "min_amount",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Minimum funding amount",
+              "title": "Min Amount"
+            },
+            "description": "Minimum funding amount"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FundingSourcesResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/relationships/funding-clusters": {
+      "get": {
+        "tags": [
+          "Relationships"
+        ],
+        "summary": "Get Funding Clusters",
+        "description": "Get funding clusters (entities sharing common funders).\n\nIdentifies groups of entities that receive funding from\nthe same sources, which may indicate coordinated influence.\n\nArgs:\n    min_shared_funders: Minimum funders that must be shared\n    min_cluster_size: Minimum entities in a cluster\n    entity_type: Filter by entity type\n    fiscal_year: Filter by fiscal year\n    limit: Maximum clusters to return",
+        "operationId": "get_funding_clusters_relationships_funding_clusters_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "min_shared_funders",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 10,
+              "minimum": 1,
+              "default": 2,
+              "title": "Min Shared Funders"
+            }
+          },
+          {
+            "name": "min_cluster_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 20,
+              "minimum": 2,
+              "default": 2,
+              "title": "Min Cluster Size"
+            }
+          },
+          {
+            "name": "entity_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by entity type (OUTLET, ORGANIZATION)",
+              "title": "Entity Type"
+            },
+            "description": "Filter by entity type (OUTLET, ORGANIZATION)"
+          },
+          {
+            "name": "fiscal_year",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by fiscal year",
+              "title": "Fiscal Year"
+            },
+            "description": "Filter by fiscal year"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FundingClustersResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/relationships/shared-funders": {
+      "get": {
+        "tags": [
+          "Relationships"
+        ],
+        "summary": "Get Shared Funders Endpoint",
+        "description": "Find funders shared by multiple entities.\n\nIdentifies funders that provide funding to multiple\nentities in the dataset.\n\nArgs:\n    entity_ids: Specific entities to check (comma-separated UUIDs)\n    min_recipients: Minimum recipients to include a funder\n    fiscal_year: Filter by fiscal year\n    limit: Maximum results",
+        "operationId": "get_shared_funders_endpoint_relationships_shared_funders_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "entity_ids",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Comma-separated entity IDs",
+              "title": "Entity Ids"
+            },
+            "description": "Comma-separated entity IDs"
+          },
+          {
+            "name": "min_recipients",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 20,
+              "minimum": 2,
+              "default": 2,
+              "title": "Min Recipients"
+            }
+          },
+          {
+            "name": "fiscal_year",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by fiscal year",
+              "title": "Fiscal Year"
+            },
+            "description": "Filter by fiscal year"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SharedFundersResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/relationships/shared-infrastructure": {
+      "get": {
+        "tags": [
+          "Relationships"
+        ],
+        "summary": "Get Shared Infrastructure",
+        "description": "Get shared infrastructure relationships between outlets.\n\nIdentifies outlets that share technical infrastructure\n(hosting, analytics, CDN) even when organizational links\nare hidden. Detects signals like:\n- Same Google Analytics/GTM IDs\n- Same hosting provider or IP address\n- Same SSL certificate SANs\n- Same AdSense publisher IDs\n- Shared nameservers or registrar\n\nArgs:\n    outlet_ids: Comma-separated outlet IDs to check\n    domains: Comma-separated domains to analyze\n    min_score: Minimum infrastructure sharing score to include\n\nReturns:\n    List of shared infrastructure matches with signals",
+        "operationId": "get_shared_infrastructure_relationships_shared_infrastructure_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "outlet_ids",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Comma-separated outlet IDs",
+              "title": "Outlet Ids"
+            },
+            "description": "Comma-separated outlet IDs"
+          },
+          {
+            "name": "domains",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Comma-separated domains to analyze",
+              "title": "Domains"
+            },
+            "description": "Comma-separated domains to analyze"
+          },
+          {
+            "name": "min_score",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "maximum": 10.0,
+              "minimum": 0.0,
+              "description": "Minimum score threshold",
+              "default": 1.0,
+              "title": "Min Score"
+            },
+            "description": "Minimum score threshold"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SharedInfrastructureResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/relationships/shared-infrastructure/analyze": {
+      "post": {
+        "tags": [
+          "Relationships"
+        ],
+        "summary": "Analyze Domain Infrastructure",
+        "description": "Analyze infrastructure for a single domain.\n\nPerforms full infrastructure detection including:\n- DNS lookup (nameservers, A records)\n- WHOIS data (registrar, registration dates)\n- Hosting provider detection via IP/ASN\n- Analytics tag detection (GA, GTM, FB Pixel, AdSense)\n- SSL certificate analysis\n\nArgs:\n    domain: Domain name to analyze (e.g., example.com)\n\nReturns:\n    Complete infrastructure profile for the domain",
+        "operationId": "analyze_domain_infrastructure_relationships_shared_infrastructure_analyze_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Domain to analyze",
+              "title": "Domain"
+            },
+            "description": "Domain to analyze"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InfrastructureAnalysisResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/detection/temporal-coordination": {
+      "post": {
+        "tags": [
+          "Detection"
+        ],
+        "summary": "Analyze Temporal Coordination",
+        "description": "Analyze temporal coordination between entities.\n\nDetects patterns indicating coordinated timing:\n- Publication bursts\n- Lead-lag relationships\n- Synchronized timing distributions\n\nArgs:\n    request: Analysis parameters\n    background_tasks: FastAPI background tasks\n\nReturns:\n    Analysis results or job ID for async mode",
+        "operationId": "analyze_temporal_coordination_detection_temporal_coordination_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TemporalAnalysisRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TemporalAnalysisResponse"
+                    },
+                    {
+                      "additionalProperties": true,
+                      "type": "object"
+                    }
+                  ],
+                  "title": "Response Analyze Temporal Coordination Api V1 Detection Temporal Coordination Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/detection/funding-clusters": {
+      "post": {
+        "tags": [
+          "Detection"
+        ],
+        "summary": "Detect Funding Clusters",
+        "description": "Detect funding clusters among entities.\n\nIdentifies groups of entities sharing common funders.\nReturns clusters scored by funding concentration with evidence references.",
+        "operationId": "detect_funding_clusters_detection_funding_clusters_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FundingClusterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FundingClusterResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/detection/politically-active-funded": {
+      "post": {
+        "tags": [
+          "Detection"
+        ],
+        "summary": "Detect Politically Active Funded",
+        "description": "Find entities that receive funding AND are politically active.\n\nIdentifies organizations that:\n1. Receive funding (via FUNDED_BY relationships)\n2. AND sponsor political ads (via SPONSORED_BY) OR lobby\n\nThis helps detect potential influence campaigns where funding flows\nto entities that then engage in political activity.",
+        "operationId": "detect_politically_active_funded_detection_politically_active_funded_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PoliticallyActiveFundedRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoliticallyActiveFundedResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/detection/infrastructure-sharing": {
+      "post": {
+        "tags": [
+          "Detection"
+        ],
+        "summary": "Detect Infrastructure Sharing",
+        "description": "Detect shared infrastructure between domains.\n\nScans domain infrastructure (DNS, WHOIS, hosting, analytics, SSL)\nand identifies pairwise matches. Accepts entity IDs (resolves to domains)\nor domain strings directly.",
+        "operationId": "detect_infrastructure_sharing_detection_infrastructure_sharing_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InfrastructureSharingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InfrastructureSharingResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/detection/composite-score": {
+      "post": {
+        "tags": [
+          "Detection"
+        ],
+        "summary": "Calculate Composite Score Endpoint",
+        "description": "Calculate composite coordination score combining all signals.\n\nUses CompositeScoreCalculator with correlation-aware weighting.\nRequires at least 2 independent signals from 2 different categories\nto flag potential coordination (no single signal triggers alone).\n\nArgs:\n    request: Score calculation parameters\n\nReturns:\n    Composite score with breakdown by signal type",
+        "operationId": "calculate_composite_score_endpoint_detection_composite_score_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompositeScoreRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompositeScoreResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/detection/explain/{finding_id}": {
+      "get": {
+        "tags": [
+          "Detection"
+        ],
+        "summary": "Explain Finding",
+        "description": "Get detailed explanation for a detection finding.\n\nProvides:\n- Why the finding was flagged\n- Evidence breakdown with source links\n- Hard negatives that were checked\n- Recommendations for further investigation\n\nArgs:\n    finding_id: ID of the finding to explain\n\nReturns:\n    Detailed finding explanation",
+        "operationId": "explain_finding_detection_explain__finding_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "finding_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Finding Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FindingExplanation"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/reports/templates": {
+      "get": {
+        "tags": [
+          "Reports"
+        ],
+        "summary": "List Report Templates",
+        "description": "List available report templates.\n\nReturns information about each report type including\nrequired data and available output formats.",
+        "operationId": "list_report_templates_reports_templates_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TemplateResponse"
+                  },
+                  "type": "array",
+                  "title": "Response List Report Templates Api V1 Reports Templates Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/reports/templates/{template_id}": {
+      "get": {
+        "tags": [
+          "Reports"
+        ],
+        "summary": "Get Template Details",
+        "description": "Get detailed information about a specific template.",
+        "operationId": "get_template_details_reports_templates__template_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Template Details Api V1 Reports Templates  Template Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/reports": {
+      "post": {
+        "tags": [
+          "Reports"
+        ],
+        "summary": "Generate Report",
+        "description": "Generate a report asynchronously.\n\nStarts report generation in the background and returns\na report ID for tracking progress.\n\nArgs:\n    request: Report generation request with type and entities\n\nReturns:\n    Report ID and status URL for tracking",
+        "operationId": "generate_report_reports_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/reports/{report_id}": {
+      "get": {
+        "tags": [
+          "Reports"
+        ],
+        "summary": "Get Report",
+        "description": "Get a generated report.\n\nArgs:\n    report_id: UUID of the report\n    format: Output format (json, html, pdf, markdown)\n\nReturns:\n    Report data in requested format",
+        "operationId": "get_report_reports__report_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "report_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Report Id"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^(json|html|pdf|markdown)$",
+              "default": "json",
+              "title": "Format"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Report Api V1 Reports  Report Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/reports/{report_id}/status": {
+      "get": {
+        "tags": [
+          "Reports"
+        ],
+        "summary": "Get Report Status",
+        "description": "Get status of a report generation job.",
+        "operationId": "get_report_status_reports__report_id__status_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "report_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Report Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Report Status Api V1 Reports  Report Id  Status Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ingestion/search": {
+      "get": {
+        "tags": [
+          "Ingestion"
+        ],
+        "summary": "Search Companies",
+        "description": "Search for companies across all data sources.\n\nSearches by company name, ticker, or identifier across SEC EDGAR,\nIRS 990, CRA, and Canada Corporations data.\n\nArgs:\n    q: Search query (company name, ticker, etc.)\n    sources: Comma-separated list of sources to search (default: all)\n    limit: Maximum results per source (default: 10)",
+        "operationId": "search_companies_ingestion_search_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Q"
+            }
+          },
+          {
+            "name": "sources",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Sources"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 10,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanySearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ingestion/autocomplete": {
+      "get": {
+        "tags": [
+          "Ingestion"
+        ],
+        "summary": "Autocomplete Entities",
+        "description": "Fast autocomplete for entity names.\n\nReturns quick suggestions from pre-scraped data as user types.\nOptimized for low latency - returns minimal data.\n\nArgs:\n    q: Search query (minimum 2 characters)\n    limit: Maximum suggestions (default: 10, max: 25)\n    types: Comma-separated entity types to include (organization, person, sponsor)",
+        "operationId": "autocomplete_entities_ingestion_autocomplete_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Q"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 10,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "types",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Types"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Autocomplete Entities Api V1 Ingestion Autocomplete Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ingestion/status": {
+      "get": {
+        "tags": [
+          "Ingestion"
+        ],
+        "summary": "Get Ingestion Status",
+        "description": "Get status of all data ingestion pipelines.\n\nReturns the health status, last run information, and\nrecord counts for each configured data source.",
+        "operationId": "get_ingestion_status_ingestion_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestionStatusResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/ingestion/runs": {
+      "get": {
+        "tags": [
+          "Ingestion"
+        ],
+        "summary": "Get Ingestion Runs",
+        "description": "Get history of ingestion runs.\n\nArgs:\n    source: Filter by source name\n    status: Filter by status\n    limit: Maximum results",
+        "operationId": "get_ingestion_runs_ingestion_runs_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Ingestion Runs Api V1 Ingestion Runs Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ingestion/runs/{run_id}": {
+      "get": {
+        "tags": [
+          "Ingestion"
+        ],
+        "summary": "Get Ingestion Run",
+        "description": "Get details of a specific ingestion run.",
+        "operationId": "get_ingestion_run_ingestion_runs__run_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestionRunResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ingestion/runs/{run_id}/logs": {
+      "get": {
+        "tags": [
+          "Ingestion"
+        ],
+        "summary": "Get Ingestion Run Logs",
+        "description": "Get log output for an ingestion run.\n\nFor active runs, returns logs from the in-memory buffer.\nFor completed runs, returns logs from the database.\n\nArgs:\n    run_id: The ingestion run ID\n    offset: Line offset for incremental polling",
+        "operationId": "get_ingestion_run_logs_ingestion_runs__run_id__logs_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Ingestion Run Logs Api V1 Ingestion Runs  Run Id  Logs Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ingestion/{source}/trigger": {
+      "post": {
+        "tags": [
+          "Ingestion"
+        ],
+        "summary": "Trigger Ingestion",
+        "description": "Trigger manual ingestion for a source.\n\nStarts an asynchronous ingestion job and returns immediately\nwith a job ID that can be used to track progress.\n\nArgs:\n    source: Data source name (irs990, cra, opencorporates, meta_ads)\n    request: Ingestion configuration\n\nReturns:\n    Job ID and status URL for tracking",
+        "operationId": "trigger_ingestion_ingestion__source__trigger_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Source"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/IngestionTriggerRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Request"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Trigger Ingestion Api V1 Ingestion  Source  Trigger Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ingestion/provincial": {
+      "get": {
+        "tags": [
+          "Ingestion"
+        ],
+        "summary": "List Provincial Sources",
+        "description": "List available provincial corporation data sources.\n\nReturns information about each province's data availability\nand ingestion method (bulk vs targeted).",
+        "operationId": "list_provincial_sources_ingestion_provincial_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List Provincial Sources Api V1 Ingestion Provincial Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/ingestion/provincial/{province}": {
+      "post": {
+        "tags": [
+          "Ingestion"
+        ],
+        "summary": "Trigger Provincial Ingestion",
+        "description": "Trigger provincial corporation ingestion.\n\nFor bulk data provinces (QC), downloads and processes the full dataset.\nFor targeted provinces (ON, SK, MB, etc.), requires either:\n- target_entities: List of entity names to search\n- from_csv: Path to CSV file with corporation data\n\nArgs:\n    province: Province code (QC, ON, SK, MB, NB, PE, NL, NT, YT, NU)\n    request: Ingestion configuration",
+        "operationId": "trigger_provincial_ingestion_ingestion_provincial__province__post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "province",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Province"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ProvincialIngestionRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Request"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Trigger Provincial Ingestion Api V1 Ingestion Provincial  Province  Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ingestion/provincial/{province}/status": {
+      "get": {
+        "tags": [
+          "Ingestion"
+        ],
+        "summary": "Get Provincial Ingestion Status",
+        "description": "Get status of provincial corporation ingestion.\n\nReturns the latest run information for the specified province.",
+        "operationId": "get_provincial_ingestion_status_ingestion_provincial__province__status_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "province",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Province"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Provincial Ingestion Status Api V1 Ingestion Provincial  Province  Status Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ingestion/provincial/cross-reference": {
+      "post": {
+        "tags": [
+          "Ingestion"
+        ],
+        "summary": "Trigger Cross Reference",
+        "description": "Trigger cross-referencing of provincial corporations with federal registry.\n\nMatches provincial corporation records with federal registry data\nusing business number and name matching strategies.\n\nMatch results are classified by confidence:\n- Auto-link (>=95%): Automatically create SAME_AS relationship\n- Flag for review (85-95%): Requires manual verification\n- No match (<85%): No relationship created\n\nArgs:\n    request: Cross-reference configuration (provinces, thresholds)",
+        "operationId": "trigger_cross_reference_ingestion_provincial_cross_reference_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/CrossReferenceRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Request"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Trigger Cross Reference Api V1 Ingestion Provincial Cross Reference Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/ingestion/linkedin/status": {
+      "get": {
+        "tags": [
+          "Ingestion"
+        ],
+        "summary": "Get Linkedin Ingestion Status",
+        "description": "Get status of LinkedIn ingestion.\n\nReturns the latest run information for LinkedIn member ingestion.",
+        "operationId": "get_linkedin_ingestion_status_ingestion_linkedin_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Linkedin Ingestion Status Api V1 Ingestion Linkedin Status Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/ingestion/linkedin": {
+      "post": {
+        "tags": [
+          "Ingestion"
+        ],
+        "summary": "Trigger Linkedin Ingestion",
+        "description": "Trigger LinkedIn member ingestion for network research.\n\nIngests LinkedIn member data to map out organizational networks.\nCreates Person nodes with EMPLOYED_BY relationships.\n\nSupports two modes:\n1. CSV Import: Upload base64-encoded CSV data (recommended)\n2. Browser Scraping: Scrape company pages (requires session cookie)\n\nArgs:\n    request: Ingestion configuration including:\n        - company_name: Company name to filter/search\n        - company_url: LinkedIn company URL (for scraping)\n        - company_entity_id: UUID of existing org to link members to\n        - csv_data: Base64-encoded CSV (for CSV import)\n        - scrape: Enable browser scraping mode\n        - session_cookie: LinkedIn li_at cookie (for scraping)\n        - titles_filter: Filter by title keywords (e.g., [\"CEO\", \"Director\"])\n        - limit: Maximum profiles to process\n\nReturns:\n    Job ID and status URL for tracking",
+        "operationId": "trigger_linkedin_ingestion_ingestion_linkedin_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkedInIngestionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Trigger Linkedin Ingestion Api V1 Ingestion Linkedin Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/ingestion/linkedin/members": {
+      "get": {
+        "tags": [
+          "Ingestion"
+        ],
+        "summary": "Get Linkedin Members",
+        "description": "Get ingested LinkedIn members.\n\nArgs:\n    company: Filter by company name\n    title: Filter by title (partial match)\n    is_executive: Filter for executives only\n    limit: Maximum results (default: 50)\n    offset: Pagination offset",
+        "operationId": "get_linkedin_members_ingestion_linkedin_members_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "company",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Company"
+            }
+          },
+          {
+            "name": "title",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Title"
+            }
+          },
+          {
+            "name": "is_executive",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Is Executive"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Linkedin Members Api V1 Ingestion Linkedin Members Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ingestion/provincial/cross-reference/review": {
+      "get": {
+        "tags": [
+          "Ingestion"
+        ],
+        "summary": "Get Cross Reference Review Items",
+        "description": "Get matches flagged for manual review.\n\nReturns provincial corporation records that matched with\n85-95% confidence and require human verification.\n\nArgs:\n    province: Filter by province code (optional)\n    limit: Maximum results (default: 50)\n    offset: Pagination offset",
+        "operationId": "get_cross_reference_review_items_ingestion_provincial_cross_reference_review_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "province",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Province"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Cross Reference Review Items Api V1 Ingestion Provincial Cross Reference Review Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ingestion/provincial/batch": {
+      "post": {
+        "tags": [
+          "Ingestion"
+        ],
+        "summary": "Trigger Batch Provincial Ingestion",
+        "description": "Trigger batch ingestion for multiple provinces.\n\nStarts ingestion for all specified provinces (or all bulk-data\nprovinces if not specified).\n\nNote: Only provinces with bulk data (QC) are included by default.\nTargeted provinces require CSV files and cannot be batched.\n\nArgs:\n    provinces: List of province codes (default: all bulk-data provinces)\n    request: Shared ingestion configuration",
+        "operationId": "trigger_batch_provincial_ingestion_ingestion_provincial_batch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_trigger_batch_provincial_ingestion_api_v1_ingestion_provincial_batch_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Trigger Batch Provincial Ingestion Api V1 Ingestion Provincial Batch Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/ingestion/quick-ingest": {
+      "post": {
+        "tags": [
+          "Ingestion"
+        ],
+        "summary": "Quick Ingest Corporation",
+        "description": "Quickly lookup and ingest a single corporation.\n\nThis endpoint:\n1. Searches the local graph for existing entity\n2. If not found, searches external sources (ISED, OpenCorporates, provincial registries)\n3. If found externally, creates the entity in the graph\n4. Returns the entity details or external matches for user selection\n\nArgs:\n    request: Corporation name and optional jurisdiction/identifiers\n\nReturns:\n    QuickIngestResponse with entity details or external matches",
+        "operationId": "quick_ingest_corporation_ingestion_quick_ingest_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuickIngestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuickIngestResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/jobs/{job_id}": {
+      "get": {
+        "tags": [
+          "Jobs"
+        ],
+        "summary": "Get Job Status",
+        "description": "Get status of an async job.\n\nArgs:\n    job_id: The job ID to check\n\nReturns:\n    Current job status and metadata",
+        "operationId": "get_job_status_jobs__job_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/jobs/{job_id}/result": {
+      "get": {
+        "tags": [
+          "Jobs"
+        ],
+        "summary": "Get Job Result",
+        "description": "Get result of a completed job.\n\nArgs:\n    job_id: The job ID to get results for\n\nReturns:\n    Job result data if completed",
+        "operationId": "get_job_result_jobs__job_id__result_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/jobs/": {
+      "get": {
+        "tags": [
+          "Jobs"
+        ],
+        "summary": "List Jobs",
+        "description": "List jobs with optional filtering.\n\nArgs:\n    job_type: Filter by job type\n    status: Filter by status (pending, running, completed, failed)\n    limit: Maximum results\n    offset: Pagination offset\n\nReturns:\n    List of jobs matching filters",
+        "operationId": "list_jobs_jobs__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by job type",
+              "title": "Job Type"
+            },
+            "description": "Filter by job type"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by status",
+              "title": "Status"
+            },
+            "description": "Filter by status"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobList"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/jobs/{job_id}/cancel": {
+      "post": {
+        "tags": [
+          "Jobs"
+        ],
+        "summary": "Cancel Job",
+        "description": "Cancel a pending or running job.\n\nArgs:\n    job_id: The job ID to cancel\n\nReturns:\n    Updated job status",
+        "operationId": "cancel_job_jobs__job_id__cancel_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/validation/metrics": {
+      "get": {
+        "tags": [
+          "Validation"
+        ],
+        "summary": "Get Validation Metrics",
+        "description": "Get current validation metrics.\n\nReturns the latest validation metrics including recall,\nprecision, false positive rate, and target compliance.",
+        "operationId": "get_validation_metrics_validation_metrics_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/validation/metrics/history": {
+      "get": {
+        "tags": [
+          "Validation"
+        ],
+        "summary": "Get Metrics History",
+        "description": "Get historical validation metrics.\n\nReturns time series data for tracking metric trends.",
+        "operationId": "get_metrics_history_validation_metrics_history_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 30,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Metrics History Api V1 Validation Metrics History Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/validation/dashboard": {
+      "get": {
+        "tags": [
+          "Validation"
+        ],
+        "summary": "Get Validation Dashboard",
+        "description": "Get aggregated dashboard data for validation metrics.\n\nReturns comprehensive dashboard data including:\n- Summary metrics\n- Historical trends\n- Metrics by case type\n- Signal performance analysis\n- Recent failures\n- Health checks",
+        "operationId": "get_validation_dashboard_validation_dashboard_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Validation Dashboard Api V1 Validation Dashboard Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/validation/run": {
+      "post": {
+        "tags": [
+          "Validation"
+        ],
+        "summary": "Run Validation",
+        "description": "Run validation against golden dataset.\n\nStarts an asynchronous validation run that:\n1. Loads the specified golden dataset\n2. Optionally generates synthetic test cases\n3. Runs detection algorithms against all cases\n4. Calculates and stores validation metrics\n\nArgs:\n    request: Validation run configuration\n\nReturns:\n    Job ID and status URL for tracking progress",
+        "operationId": "run_validation_validation_run_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidationRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationRunResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/validation/jobs/{job_id}": {
+      "get": {
+        "tags": [
+          "Validation"
+        ],
+        "summary": "Get Validation Job",
+        "description": "Get status of a validation job.",
+        "operationId": "get_validation_job_validation_jobs__job_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Validation Job Api V1 Validation Jobs  Job Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/validation/datasets": {
+      "get": {
+        "tags": [
+          "Validation"
+        ],
+        "summary": "List Golden Datasets",
+        "description": "List available golden datasets.",
+        "operationId": "list_golden_datasets_validation_datasets_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array",
+                  "title": "Response List Golden Datasets Api V1 Validation Datasets Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/validation/datasets/{dataset_id}": {
+      "get": {
+        "tags": [
+          "Validation"
+        ],
+        "summary": "Get Golden Dataset",
+        "description": "Get details of a golden dataset.",
+        "operationId": "get_golden_dataset_validation_datasets__dataset_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "dataset_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Dataset Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Golden Dataset Api V1 Validation Datasets  Dataset Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/resolution/candidates": {
+      "get": {
+        "tags": [
+          "Resolution"
+        ],
+        "summary": "List Candidates",
+        "description": "List pending resolution candidates with pagination.",
+        "operationId": "list_candidates_resolution_candidates_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^(pending|in_progress|all)$",
+              "default": "pending",
+              "title": "Status"
+            }
+          },
+          {
+            "name": "priority",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Priority"
+            }
+          },
+          {
+            "name": "strategy",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Strategy"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/resolution/candidates/{candidate_id}/merge": {
+      "post": {
+        "tags": [
+          "Resolution"
+        ],
+        "summary": "Merge Candidate",
+        "description": "Approve and merge a resolution candidate.",
+        "operationId": "merge_candidate_resolution_candidates__candidate_id__merge_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "candidate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Candidate Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolutionActionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/resolution/candidates/{candidate_id}/reject": {
+      "post": {
+        "tags": [
+          "Resolution"
+        ],
+        "summary": "Reject Candidate",
+        "description": "Reject a resolution candidate.",
+        "operationId": "reject_candidate_resolution_candidates__candidate_id__reject_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "candidate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Candidate Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolutionActionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/resolution/trigger": {
+      "post": {
+        "tags": [
+          "Resolution"
+        ],
+        "summary": "Trigger Resolution",
+        "description": "Trigger a resolution run.",
+        "operationId": "trigger_resolution_resolution_trigger_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "entity_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^(Organization|Person|Outlet|all)$",
+              "default": "all",
+              "title": "Entity Type"
+            }
+          },
+          {
+            "name": "dry_run",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Dry Run"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolutionTriggerResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/resolution/stats": {
+      "get": {
+        "tags": [
+          "Resolution"
+        ],
+        "summary": "Resolution Stats",
+        "description": "Get resolution queue statistics.",
+        "operationId": "resolution_stats_resolution_stats_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolutionStatsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/resolution/cross-border": {
+      "post": {
+        "tags": [
+          "Resolution"
+        ],
+        "summary": "Run Cross Border Resolution",
+        "description": "Run cross-border entity resolution.\n\nLinks foreign grant recipients (from IRS 990 Schedule I) to known\nentities in target countries (e.g., CRA charities in Canada).\n\nRequest body:\n- target_country: Country code (default: CA)\n- limit: Maximum grants to process (default: 100)\n- auto_merge_threshold: Confidence threshold for auto-merge (default: 0.9)\n- auto_merge: Whether to auto-merge (default: true)\n\nReturns resolution statistics and list of results.",
+        "operationId": "run_cross_border_resolution_resolution_cross_border_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CrossBorderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/resolution/cross-border/unresolved": {
+      "get": {
+        "tags": [
+          "Resolution"
+        ],
+        "summary": "Get Unresolved Grants",
+        "description": "Get list of unresolved foreign grants.\n\nReturns grants that have recipients in the target country\nbut haven't been linked to known entities (no BN).",
+        "operationId": "get_unresolved_grants_resolution_cross_border_unresolved_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "country",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Target country code",
+              "default": "CA",
+              "title": "Country"
+            },
+            "description": "Target country code"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/settings": {
+      "get": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Get All Settings",
+        "description": "Get all system settings and status.\n\nReturns API configuration, connection status, and data source information.\nSensitive values like passwords and API keys are not exposed.",
+        "operationId": "get_all_settings_settings_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/settings/connections": {
+      "get": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Get Connections Status",
+        "description": "Get status of all service connections.\n\nChecks connectivity to PostgreSQL, Neo4j, Redis, and S3.",
+        "operationId": "get_connections_status_settings_connections_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/settings/sources": {
+      "get": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Get Data Sources",
+        "description": "Get data source configuration and status.\n\nReturns information about all available data sources including\nwhether they are enabled and if required API keys are configured.",
+        "operationId": "get_data_sources_settings_sources_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataSourcesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/research/sessions": {
+      "post": {
+        "tags": [
+          "Research",
+          "research"
+        ],
+        "summary": "Create Session",
+        "description": "Create and optionally start a new research session.\n\nThe session is created in INITIALIZING state. Use the\n/sessions/{id}/start endpoint to begin processing, or\npass `start=true` query parameter.",
+        "operationId": "create_session_research_sessions_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSessionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Research",
+          "research"
+        ],
+        "summary": "List Sessions",
+        "description": "List research sessions with optional filtering.",
+        "operationId": "list_sessions_research_sessions_get",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/SessionStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/research/sessions/{session_id}": {
+      "get": {
+        "tags": [
+          "Research",
+          "research"
+        ],
+        "summary": "Get Session",
+        "description": "Get details for a specific session.",
+        "operationId": "get_session_research_sessions__session_id__get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Research",
+          "research"
+        ],
+        "summary": "Delete Session",
+        "description": "Delete a session and all its data.",
+        "operationId": "delete_session_research_sessions__session_id__delete",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/research/sessions/{session_id}/start": {
+      "post": {
+        "tags": [
+          "Research",
+          "research"
+        ],
+        "summary": "Start Session",
+        "description": "Start processing a session.\n\nThis creates the initial lead from the entry point and\nmarks the session as RUNNING.",
+        "operationId": "start_session_research_sessions__session_id__start_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/research/sessions/{session_id}/pause": {
+      "post": {
+        "tags": [
+          "Research",
+          "research"
+        ],
+        "summary": "Pause Session",
+        "description": "Pause a running session.",
+        "operationId": "pause_session_research_sessions__session_id__pause_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/research/sessions/{session_id}/resume": {
+      "post": {
+        "tags": [
+          "Research",
+          "research"
+        ],
+        "summary": "Resume Session",
+        "description": "Resume a paused session.",
+        "operationId": "resume_session_research_sessions__session_id__resume_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/research/sessions/{session_id}/entities": {
+      "get": {
+        "tags": [
+          "Research",
+          "research"
+        ],
+        "summary": "Get Session Entities",
+        "description": "Get entities discovered in a session.",
+        "operationId": "get_session_entities_research_sessions__session_id__entities_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "depth",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Depth"
+            }
+          },
+          {
+            "name": "entity_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Entity Type"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntitiesListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/research/sessions/{session_id}/graph": {
+      "get": {
+        "tags": [
+          "Research",
+          "research"
+        ],
+        "summary": "Get Session Graph",
+        "description": "Get session discoveries as a graph for visualization.",
+        "operationId": "get_session_graph_research_sessions__session_id__graph_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "max_nodes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "default": 200,
+              "title": "Max Nodes"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionGraph"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/research/sessions/{session_id}/leads": {
+      "get": {
+        "tags": [
+          "Research",
+          "research"
+        ],
+        "summary": "Get Session Leads",
+        "description": "Get leads in a session's queue.",
+        "operationId": "get_session_leads_research_sessions__session_id__leads_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/LeadStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "lead_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/LeadType"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lead Type"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadsListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/research/sessions/{session_id}/leads/{lead_id}/skip": {
+      "post": {
+        "tags": [
+          "Research",
+          "research"
+        ],
+        "summary": "Skip Lead",
+        "description": "Manually skip a pending lead.",
+        "operationId": "skip_lead_research_sessions__session_id__leads__lead_id__skip_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "lead_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Lead Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkipLeadRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/research/sessions/{session_id}/leads/{lead_id}/prioritize": {
+      "post": {
+        "tags": [
+          "Research",
+          "research"
+        ],
+        "summary": "Prioritize Lead",
+        "description": "Change a lead's priority.",
+        "operationId": "prioritize_lead_research_sessions__session_id__leads__lead_id__prioritize_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "lead_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Lead Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrioritizeLeadRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/research/sessions/{session_id}/leads/{lead_id}/requeue": {
+      "post": {
+        "tags": [
+          "Research",
+          "research"
+        ],
+        "summary": "Requeue Lead",
+        "description": "Requeue a failed or skipped lead.",
+        "operationId": "requeue_lead_research_sessions__session_id__leads__lead_id__requeue_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "lead_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Lead Id"
+            }
+          },
+          {
+            "name": "priority",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Priority"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cases": {
+      "get": {
+        "tags": [
+          "Cases",
+          "cases"
+        ],
+        "summary": "List Cases",
+        "description": "List cases with optional filters.",
+        "operationId": "list_cases_cases_get",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/CaseStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "created_by",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Created By"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaseListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Cases",
+          "cases"
+        ],
+        "summary": "Create Case",
+        "description": "Create a new case from an entry point.",
+        "operationId": "create_case_cases_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCaseRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaseResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cases/{case_id}": {
+      "get": {
+        "tags": [
+          "Cases",
+          "cases"
+        ],
+        "summary": "Get Case",
+        "description": "Get case details.",
+        "operationId": "get_case_cases__case_id__get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaseResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Cases",
+          "cases"
+        ],
+        "summary": "Delete Case",
+        "description": "Delete a case.",
+        "operationId": "delete_case_cases__case_id__delete",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cases/{case_id}/start": {
+      "post": {
+        "tags": [
+          "Cases",
+          "cases"
+        ],
+        "summary": "Start Case",
+        "description": "Start processing a case.",
+        "operationId": "start_case_cases__case_id__start_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaseResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cases/{case_id}/pause": {
+      "post": {
+        "tags": [
+          "Cases",
+          "cases"
+        ],
+        "summary": "Pause Case",
+        "description": "Pause case processing.",
+        "operationId": "pause_case_cases__case_id__pause_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaseResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cases/{case_id}/resume": {
+      "post": {
+        "tags": [
+          "Cases",
+          "cases"
+        ],
+        "summary": "Resume Case",
+        "description": "Resume case processing.",
+        "operationId": "resume_case_cases__case_id__resume_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaseResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cases/{case_id}/processing": {
+      "get": {
+        "tags": [
+          "Cases",
+          "cases"
+        ],
+        "summary": "Get Case Processing",
+        "description": "Get detailed processing information for an active case.\n\nReturns real-time processing statistics including:\n- Current processing phase\n- Progress percentage\n- Lead counts (pending, completed, failed)\n- Recently discovered entities\n- Current leads being processed",
+        "operationId": "get_case_processing_cases__case_id__processing_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingDetails"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cases/{case_id}/report": {
+      "get": {
+        "tags": [
+          "Cases",
+          "cases"
+        ],
+        "summary": "Get Case Report",
+        "description": "Get case report in specified format.",
+        "operationId": "get_case_report_cases__case_id__report_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^(json|markdown|md)$",
+              "default": "json",
+              "title": "Format"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Cases",
+          "cases"
+        ],
+        "summary": "Generate Case Report",
+        "description": "Generate or regenerate case report.",
+        "operationId": "generate_case_report_cases__case_id__report_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cases/{case_id}/matches": {
+      "get": {
+        "tags": [
+          "Cases",
+          "cases"
+        ],
+        "summary": "List Case Matches",
+        "description": "List entity matches for a case.",
+        "operationId": "list_case_matches_cases__case_id__matches_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/MatchStatus",
+              "default": "pending"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatchListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cases/matches/{match_id}/approve": {
+      "post": {
+        "tags": [
+          "Cases",
+          "cases"
+        ],
+        "summary": "Approve Match",
+        "description": "Approve an entity match.",
+        "operationId": "approve_match_cases_matches__match_id__approve_post",
+        "parameters": [
+          {
+            "name": "match_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Match Id"
+            }
+          },
+          {
+            "name": "reviewed_by",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "anonymous",
+              "title": "Reviewed By"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ReviewRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Request"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntityMatchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cases/matches/{match_id}/reject": {
+      "post": {
+        "tags": [
+          "Cases",
+          "cases"
+        ],
+        "summary": "Reject Match",
+        "description": "Reject an entity match.",
+        "operationId": "reject_match_cases_matches__match_id__reject_post",
+        "parameters": [
+          {
+            "name": "match_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Match Id"
+            }
+          },
+          {
+            "name": "reviewed_by",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "anonymous",
+              "title": "Reviewed By"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ReviewRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Request"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntityMatchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cases/matches/{match_id}/defer": {
+      "post": {
+        "tags": [
+          "Cases",
+          "cases"
+        ],
+        "summary": "Defer Match",
+        "description": "Defer an entity match for later review.",
+        "operationId": "defer_match_cases_matches__match_id__defer_post",
+        "parameters": [
+          {
+            "name": "match_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Match Id"
+            }
+          },
+          {
+            "name": "reviewed_by",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "anonymous",
+              "title": "Reviewed By"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ReviewRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Request"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntityMatchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/meta/auth/login": {
+      "get": {
+        "tags": [
+          "Meta OAuth"
+        ],
+        "summary": "Get Meta Auth Url",
+        "description": "Get the Facebook OAuth URL to initiate authentication.\n\nReturns a URL that the frontend should redirect the user to.\nThe URL includes:\n- client_id: Your Meta App ID\n- redirect_uri: Callback URL (must be registered in Meta App)\n- scope: Requested permissions (ads_read, pages_read_engagement)\n- state: CSRF token for security\n\nReturns:\n    MetaAuthUrlResponse with auth_url and state token",
+        "operationId": "get_meta_auth_url_meta_auth_login_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetaAuthUrlResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/meta/auth/callback": {
+      "get": {
+        "tags": [
+          "Meta OAuth"
+        ],
+        "summary": "Handle Meta Callback",
+        "description": "Handle the OAuth callback from Facebook.\n\nFacebook redirects here after user grants/denies permissions.\nThis endpoint:\n1. Validates the CSRF state token\n2. Exchanges the authorization code for an access token\n3. Exchanges short-lived token for long-lived token (60 days)\n4. Stores the token in the database\n5. Redirects to frontend settings page with success/error status\n\nQuery Parameters:\n    code: Authorization code from Facebook (on success)\n    state: CSRF state token (must match what we sent)\n    error: Error code if user denied or error occurred\n    error_description: Human-readable error description\n\nReturns:\n    Redirect to frontend settings page",
+        "operationId": "handle_meta_callback_meta_auth_callback_get",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Code"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "name": "error",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Error"
+            }
+          },
+          {
+            "name": "error_description",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Error Description"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/meta/auth/status": {
+      "get": {
+        "tags": [
+          "Meta OAuth"
+        ],
+        "summary": "Get Meta Status",
+        "description": "Get the current Meta connection status.\n\nReturns information about whether a Facebook account is connected,\nincluding user details and token expiration.\n\nReturns:\n    MetaAuthStatusResponse with connection details",
+        "operationId": "get_meta_status_meta_auth_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetaAuthStatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/meta/auth/disconnect": {
+      "delete": {
+        "tags": [
+          "Meta OAuth"
+        ],
+        "summary": "Disconnect Meta",
+        "description": "Disconnect the Facebook account.\n\nRemoves the stored OAuth token from the database.\nThe system will fall back to META_ACCESS_TOKEN env var if set.\n\nReturns:\n    MetaDisconnectResponse with success status",
+        "operationId": "disconnect_meta_meta_auth_disconnect_delete",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetaDisconnectResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/meta/auth/refresh": {
+      "post": {
+        "tags": [
+          "Meta OAuth"
+        ],
+        "summary": "Refresh Meta Token",
+        "description": "Attempt to refresh the Meta token if expiring soon.\n\nNote: Meta doesn't support traditional refresh tokens. This endpoint\nchecks if the token is expiring soon and prompts re-authentication.\n\nReturns:\n    Status of the refresh attempt",
+        "operationId": "refresh_meta_token_meta_auth_refresh_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Refresh Meta Token Api V1 Meta Auth Refresh Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {},
+    "parameters": {
+      "LimitParam": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "default": 20,
+          "minimum": 1,
+          "maximum": 100
+        },
+        "description": "Maximum number of results to return"
+      },
+      "OffsetParam": {
+        "name": "offset",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0
+        },
+        "description": "Number of results to skip"
+      },
+      "QueryParam": {
+        "name": "q",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Search query string"
+      },
+      "EntityIdParam": {
+        "name": "entity_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "description": "Unique entity identifier"
+      },
+      "JobIdParam": {
+        "name": "job_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "description": "Background job identifier"
+      },
+      "CaseIdParam": {
+        "name": "case_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "description": "Case identifier"
+      },
+      "SessionIdParam": {
+        "name": "session_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "description": "Research session identifier"
+      },
+      "EntityTypeParam": {
+        "name": "type",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "enum": [
+            "PERSON",
+            "ORGANIZATION",
+            "OUTLET",
+            "DOMAIN",
+            "PLATFORM_ACCOUNT",
+            "SPONSOR",
+            "VENDOR"
+          ]
+        },
+        "description": "Filter by entity type"
+      },
+      "JurisdictionParam": {
+        "name": "jurisdiction",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Filter by jurisdiction (e.g., 'US', 'CA', 'CA-ON')"
+      },
+      "StatusParam": {
+        "name": "status",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Filter by status"
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Bad Request - Invalid parameters",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "success",
+                "error",
+                "error_code"
+              ],
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "enum": [
+                    false
+                  ]
+                },
+                "error": {
+                  "type": "string",
+                  "description": "Human-readable error message"
+                },
+                "error_code": {
+                  "type": "string",
+                  "description": "Machine-readable error code"
+                },
+                "details": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "code": {
+                        "type": "string"
+                      },
+                      "message": {
+                        "type": "string"
+                      },
+                      "field": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "example": {
+              "success": false,
+              "error": "Validation failed",
+              "error_code": "VALIDATION_ERROR",
+              "details": [
+                {
+                  "code": "INVALID_FORMAT",
+                  "message": "Invalid UUID format",
+                  "field": "entity_id"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "Unauthorized - Missing or invalid token",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "success",
+                "error",
+                "error_code"
+              ],
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "enum": [
+                    false
+                  ]
+                },
+                "error": {
+                  "type": "string",
+                  "description": "Human-readable error message"
+                },
+                "error_code": {
+                  "type": "string",
+                  "description": "Machine-readable error code"
+                },
+                "details": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "code": {
+                        "type": "string"
+                      },
+                      "message": {
+                        "type": "string"
+                      },
+                      "field": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "example": {
+              "success": false,
+              "error": "Authentication required",
+              "error_code": "AUTHENTICATION_REQUIRED"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "Forbidden - Insufficient permissions",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "success",
+                "error",
+                "error_code"
+              ],
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "enum": [
+                    false
+                  ]
+                },
+                "error": {
+                  "type": "string",
+                  "description": "Human-readable error message"
+                },
+                "error_code": {
+                  "type": "string",
+                  "description": "Machine-readable error code"
+                },
+                "details": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "code": {
+                        "type": "string"
+                      },
+                      "message": {
+                        "type": "string"
+                      },
+                      "field": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "example": {
+              "success": false,
+              "error": "Access denied",
+              "error_code": "ACCESS_DENIED"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Not Found - Resource does not exist",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "success",
+                "error",
+                "error_code"
+              ],
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "enum": [
+                    false
+                  ]
+                },
+                "error": {
+                  "type": "string",
+                  "description": "Human-readable error message"
+                },
+                "error_code": {
+                  "type": "string",
+                  "description": "Machine-readable error code"
+                },
+                "details": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "code": {
+                        "type": "string"
+                      },
+                      "message": {
+                        "type": "string"
+                      },
+                      "field": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "example": {
+              "success": false,
+              "error": "Entity not found",
+              "error_code": "NOT_FOUND"
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "Too Many Requests - Rate limit exceeded",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "success",
+                "error",
+                "error_code"
+              ],
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "enum": [
+                    false
+                  ]
+                },
+                "error": {
+                  "type": "string",
+                  "description": "Human-readable error message"
+                },
+                "error_code": {
+                  "type": "string",
+                  "description": "Machine-readable error code"
+                },
+                "details": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "code": {
+                        "type": "string"
+                      },
+                      "message": {
+                        "type": "string"
+                      },
+                      "field": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "example": {
+              "success": false,
+              "error": "Rate limit exceeded. Retry after 60 seconds.",
+              "error_code": "RATE_LIMIT_EXCEEDED"
+            }
+          }
+        }
+      },
+      "InternalError": {
+        "description": "Internal Server Error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "success",
+                "error",
+                "error_code"
+              ],
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "enum": [
+                    false
+                  ]
+                },
+                "error": {
+                  "type": "string",
+                  "description": "Human-readable error message"
+                },
+                "error_code": {
+                  "type": "string",
+                  "description": "Machine-readable error code"
+                },
+                "details": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "code": {
+                        "type": "string"
+                      },
+                      "message": {
+                        "type": "string"
+                      },
+                      "field": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "example": {
+              "success": false,
+              "error": "An unexpected error occurred",
+              "error_code": "INTERNAL_ERROR"
+            }
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT token for authentication. Obtain from /api/v1/auth/token"
+      },
+      "apiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key",
+        "description": "API key for service-to-service authentication"
+      }
+    }
+  },
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ]
+}

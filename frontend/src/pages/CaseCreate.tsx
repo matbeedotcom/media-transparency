@@ -7,12 +7,20 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
-import { createCase, startCase, type CreateCaseRequest } from '../services/api';
+import { createCase, startCase, type CreateCaseRequest, type CreateCaseRequestEntryPointType } from '@/api';
 import { EntryPointForm } from '../components/cases/EntryPointForm';
 
-type EntryPointType = 'meta_ad' | 'corporation' | 'url' | 'text';
+type UIEntryPointType = 'meta_ad' | 'corporation' | 'url' | 'text';
 
-const entryPointLabels: Record<EntryPointType, { label: string; description: string; placeholder: string }> = {
+// Map UI types to API types
+const entryPointTypeMap: Record<UIEntryPointType, CreateCaseRequestEntryPointType> = {
+  meta_ad: 'META_AD',
+  corporation: 'CORPORATION',
+  url: 'URL',
+  text: 'TEXT',
+};
+
+const entryPointLabels: Record<UIEntryPointType, { label: string; description: string; placeholder: string }> = {
   meta_ad: {
     label: 'Meta Ad Sponsor',
     description: 'Enter a Facebook/Instagram ad sponsor name or page ID',
@@ -39,7 +47,7 @@ export default function CaseCreate() {
   const navigate = useNavigate();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [entryPointType, setEntryPointType] = useState<EntryPointType>('meta_ad');
+  const [entryPointType, setEntryPointType] = useState<UIEntryPointType>('meta_ad');
   const [entryPointValue, setEntryPointValue] = useState('');
   const [maxDepth, setMaxDepth] = useState(2);
   const [maxEntities, setMaxEntities] = useState(100);
@@ -78,7 +86,7 @@ export default function CaseCreate() {
     createMutation.mutate({
       name: name.trim(),
       description: description.trim() || undefined,
-      entry_point_type: entryPointType,
+      entry_point_type: entryPointTypeMap[entryPointType],
       entry_point_value: entryPointValue.trim(),
       config: {
         max_depth: maxDepth,
@@ -131,7 +139,7 @@ export default function CaseCreate() {
           <p className="text-muted">Choose how to start this investigation</p>
 
           <div className="entry-type-selector">
-            {(Object.keys(entryPointLabels) as EntryPointType[]).map((type) => (
+            {(Object.keys(entryPointLabels) as UIEntryPointType[]).map((type) => (
               <button
                 key={type}
                 type="button"

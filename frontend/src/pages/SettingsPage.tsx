@@ -13,11 +13,12 @@ import {
   getMetaAuthUrl,
   getMetaAuthStatus,
   disconnectMeta,
-  type SettingsResponse,
   type ConnectionInfo,
   type DataSourceInfo,
-  type ConnectionStatusType,
-} from '../services/api';
+  type ConnectionStatus,
+} from '@/api';
+
+type ConnectionStatusType = ConnectionStatus;
 
 type TabType = 'sources' | 'connections' | 'api';
 
@@ -26,13 +27,13 @@ export default function SettingsPage() {
 
   const { data: settings, isLoading, error, refetch } = useQuery({
     queryKey: ['settings'],
-    queryFn: getSettings,
+    queryFn: ({ signal }) => getSettings(signal),
     staleTime: 30_000, // 30 seconds
   });
 
   const { refetch: refetchConnections, isFetching: isRefetchingConnections } = useQuery({
     queryKey: ['connections'],
-    queryFn: getConnectionsStatus,
+    queryFn: ({ signal }) => getConnectionsStatus(signal),
     enabled: false, // Only fetch on demand
   });
 
@@ -76,8 +77,8 @@ export default function SettingsPage() {
           <p className="subtitle">System configuration and data source status</p>
         </div>
         <div className="header-actions">
-          <span className="env-badge" data-env={settings?.api.environment}>
-            {settings?.api.environment}
+          <span className="env-badge" data-env={settings?.api?.environment}>
+            {settings?.api?.environment}
           </span>
         </div>
       </header>
@@ -106,18 +107,18 @@ export default function SettingsPage() {
 
       {/* Tab Content */}
       <div className="tab-content">
-        {activeTab === 'sources' && settings && (
-          <DataSourcesTab sources={settings.data_sources} />
+        {activeTab === 'sources' && settings?.data_sources && (
+          <DataSourcesTab sources={Object.values(settings.data_sources) as DataSourceInfo[]} />
         )}
-        {activeTab === 'connections' && settings && (
+        {activeTab === 'connections' && settings?.connections && (
           <ConnectionsTab
-            connections={settings.connections}
+            connections={Object.values(settings.connections) as ConnectionInfo[]}
             onRefresh={handleRefreshConnections}
             isRefreshing={isRefetchingConnections}
           />
         )}
-        {activeTab === 'api' && settings && (
-          <APIConfigTab config={settings.api} />
+        {activeTab === 'api' && settings?.api && (
+          <APIConfigTab config={settings.api as ExtendedAPIConfig} />
         )}
       </div>
 
@@ -193,16 +194,18 @@ function MetaConnectionCard() {
   // Fetch Meta auth status
   const { data: metaStatus, isLoading: isLoadingStatus } = useQuery({
     queryKey: ['meta-auth-status'],
-    queryFn: getMetaAuthStatus,
+    queryFn: ({ signal }) => getMetaAuthStatus(signal),
     staleTime: 30_000,
   });
 
   // Connect mutation
   const connectMutation = useMutation({
-    mutationFn: getMetaAuthUrl,
+    mutationFn: (signal?: AbortSignal) => getMetaAuthUrl(signal),
     onSuccess: (data) => {
       // Redirect to Facebook OAuth
-      window.location.href = data.auth_url;
+      if (data.auth_url) {
+        window.location.href = data.auth_url;
+      }
     },
     onError: (error: Error) => {
       setErrorMessage(error.message || 'Failed to initiate Facebook login');
@@ -211,7 +214,7 @@ function MetaConnectionCard() {
 
   // Disconnect mutation
   const disconnectMutation = useMutation({
-    mutationFn: disconnectMeta,
+    mutationFn: (signal?: AbortSignal) => disconnectMeta(signal),
     onSuccess: () => {
       setSuccessMessage('Facebook account disconnected');
       queryClient.invalidateQueries({ queryKey: ['meta-auth-status'] });
@@ -224,14 +227,14 @@ function MetaConnectionCard() {
   const handleConnect = () => {
     setErrorMessage(null);
     setSuccessMessage(null);
-    connectMutation.mutate();
+    connectMutation.mutate(undefined);
   };
 
   const handleDisconnect = () => {
     setErrorMessage(null);
     setSuccessMessage(null);
     if (window.confirm('Are you sure you want to disconnect your Facebook account?')) {
-      disconnectMutation.mutate();
+      disconnectMutation.mutate(undefined);
     }
   };
 
@@ -399,7 +402,7 @@ function DataSourceCard({ source }: { source: DataSourceInfo }) {
 
         <div className="detail-row">
           <span className="detail-label">Records</span>
-          <span className="detail-value">{source.records_total.toLocaleString()}</span>
+          <span className="detail-value">{(source.records_total ?? 0).toLocaleString()}</span>
         </div>
       </div>
     </div>
@@ -419,7 +422,7 @@ function ConnectionsTab({
   onRefresh: () => void;
   isRefreshing: boolean;
 }) {
-  const allHealthy = connections.every((c) => c.status === 'healthy');
+  const allHealthy = connections.every((c) => c.status === 'CONNECTED');
 
   return (
     <div className="tab-panel">
@@ -455,12 +458,13 @@ function ConnectionsTab({
 
 function ConnectionCard({ connection }: { connection: ConnectionInfo }) {
   const statusConfig: Record<ConnectionStatusType, { icon: string; color: string }> = {
-    healthy: { icon: '✅', color: 'var(--color-success)' },
-    unhealthy: { icon: '❌', color: 'var(--color-danger)' },
-    unknown: { icon: '❓', color: 'var(--color-warning)' },
+    CONNECTED: { icon: '✅', color: 'var(--color-success)' },
+    DISCONNECTED: { icon: '❌', color: 'var(--color-danger)' },
+    ERROR: { icon: '❓', color: 'var(--color-warning)' },
   };
 
-  const { icon, color } = statusConfig[connection.status];
+  const status = connection.status ?? 'ERROR';
+  const { icon, color } = statusConfig[status];
 
   return (
     <div className={`connection-card ${connection.status}`}>
@@ -492,7 +496,17 @@ function ConnectionCard({ connection }: { connection: ConnectionInfo }) {
 // API Configuration Tab
 // =========================
 
-function APIConfigTab({ config }: { config: SettingsResponse['api'] }) {
+interface ExtendedAPIConfig {
+  environment?: string;
+  version?: string;
+  api_host?: string;
+  api_port?: number;
+  debug_mode?: boolean;
+  log_level?: string;
+  cors_origins?: string[];
+}
+
+function APIConfigTab({ config }: { config: ExtendedAPIConfig }) {
   return (
     <div className="tab-panel">
       <div className="panel-header">
@@ -510,20 +524,20 @@ function APIConfigTab({ config }: { config: SettingsResponse['api'] }) {
               <td className="config-label">Environment</td>
               <td className="config-value">
                 <span className="env-badge" data-env={config.environment}>
-                  {config.environment}
+                  {config.environment ?? 'unknown'}
                 </span>
               </td>
             </tr>
             <tr>
               <td className="config-label">API Host</td>
               <td className="config-value">
-                <code>{config.api_host}</code>
+                <code>{config.api_host ?? 'N/A'}</code>
               </td>
             </tr>
             <tr>
               <td className="config-label">API Port</td>
               <td className="config-value">
-                <code>{config.api_port}</code>
+                <code>{config.api_port ?? 'N/A'}</code>
               </td>
             </tr>
             <tr>
@@ -537,14 +551,14 @@ function APIConfigTab({ config }: { config: SettingsResponse['api'] }) {
             <tr>
               <td className="config-label">Log Level</td>
               <td className="config-value">
-                <code>{config.log_level}</code>
+                <code>{config.log_level ?? 'N/A'}</code>
               </td>
             </tr>
             <tr>
               <td className="config-label">CORS Origins</td>
               <td className="config-value">
                 <div className="origins-list">
-                  {config.cors_origins.map((origin, i) => (
+                  {(config.cors_origins ?? []).map((origin: string, i: number) => (
                     <code key={i}>{origin}</code>
                   ))}
                 </div>

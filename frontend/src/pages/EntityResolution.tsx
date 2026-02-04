@@ -16,7 +16,9 @@ import {
   rejectCandidate,
   triggerResolution,
   type ResolutionCandidate,
-} from '../services/api';
+  type ListCandidatesStatus,
+  type EntityType,
+} from '@/api';
 
 export default function EntityResolution() {
   const queryClient = useQueryClient();
@@ -38,7 +40,7 @@ export default function EntityResolution() {
   // Fetch stats
   const { data: stats } = useQuery({
     queryKey: ['resolution-stats'],
-    queryFn: getResolutionStats,
+    queryFn: ({ signal }) => getResolutionStats(signal),
     refetchInterval: 30000,
   });
 
@@ -47,9 +49,7 @@ export default function EntityResolution() {
     queryKey: ['resolution-candidates', statusFilter, priorityFilter, strategyFilter, page],
     queryFn: () =>
       getResolutionCandidates({
-        status: statusFilter || undefined,
-        priority: priorityFilter || undefined,
-        strategy: strategyFilter || undefined,
+        status: (statusFilter || undefined) as ListCandidatesStatus | undefined,
         limit: pageSize,
         offset: page * pageSize,
       }),
@@ -57,7 +57,7 @@ export default function EntityResolution() {
 
   // Mutations
   const mergeMutation = useMutation({
-    mutationFn: mergeCandidate,
+    mutationFn: (candidateId: string) => mergeCandidate(candidateId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['resolution-candidates'] });
       queryClient.invalidateQueries({ queryKey: ['resolution-stats'] });
@@ -66,7 +66,7 @@ export default function EntityResolution() {
   });
 
   const rejectMutation = useMutation({
-    mutationFn: rejectCandidate,
+    mutationFn: (candidateId: string) => rejectCandidate(candidateId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['resolution-candidates'] });
       queryClient.invalidateQueries({ queryKey: ['resolution-stats'] });
@@ -77,7 +77,7 @@ export default function EntityResolution() {
   const triggerMutation = useMutation({
     mutationFn: () =>
       triggerResolution({
-        entity_type: triggerEntityType || undefined,
+        entity_type: (triggerEntityType || undefined) as EntityType | undefined,
         dry_run: dryRun,
       }),
     onSuccess: () => {
@@ -188,7 +188,7 @@ export default function EntityResolution() {
           <div className="strategy-chips">
             {Object.entries(stats.by_strategy).map(([strategy, count]) => (
               <span key={strategy} className="strategy-chip">
-                {getStrategyLabel(strategy)}: {count}
+                {getStrategyLabel(strategy)}: {String(count ?? 0)}
               </span>
             ))}
           </div>
@@ -323,13 +323,13 @@ export default function EntityResolution() {
           <div className="candidates-list">
             {candidates.map((candidate: ResolutionCandidate) => (
               <div
-                key={candidate.id}
+                key={candidate.id ?? 'unknown'}
                 className={`card candidate-card ${expandedId === candidate.id ? 'expanded' : ''}`}
               >
                 <div
                   className="candidate-summary"
                   onClick={() =>
-                    setExpandedId(expandedId === candidate.id ? null : candidate.id)
+                    setExpandedId(expandedId === candidate.id ? null : candidate.id ?? null)
                   }
                 >
                   <div className="candidate-entities">
@@ -353,15 +353,15 @@ export default function EntityResolution() {
                   </div>
                   <div className="candidate-meta">
                     <span className="strategy-tag">
-                      {getStrategyLabel(candidate.match_strategy)}
+                      {getStrategyLabel(candidate.match_strategy ?? '')}
                     </span>
                     <span
                       className="confidence-badge"
                       style={{
-                        color: getConfidenceColor(candidate.match_confidence),
+                        color: getConfidenceColor(candidate.match_confidence ?? 0),
                       }}
                     >
-                      {(candidate.match_confidence * 100).toFixed(0)}%
+                      {((candidate.match_confidence ?? 0) * 100).toFixed(0)}%
                     </span>
                     <span className={`priority-tag priority-${candidate.priority}`}>
                       {candidate.priority}
@@ -426,21 +426,21 @@ export default function EntityResolution() {
                         <div
                           className="confidence-fill"
                           style={{
-                            width: `${candidate.match_confidence * 100}%`,
+                            width: `${(candidate.match_confidence ?? 0) * 100}%`,
                             backgroundColor: getConfidenceColor(
-                              candidate.match_confidence
+                              candidate.match_confidence ?? 0
                             ),
                           }}
                         />
                       </div>
-                      <span>{(candidate.match_confidence * 100).toFixed(1)}%</span>
+                      <span>{((candidate.match_confidence ?? 0) * 100).toFixed(1)}%</span>
                     </div>
 
                     {/* Actions */}
                     <div className="review-actions">
                       <button
                         className="btn btn-merge"
-                        onClick={() => handleMerge(candidate.id)}
+                        onClick={() => handleMerge(candidate.id ?? '')}
                         disabled={
                           mergeMutation.isPending || rejectMutation.isPending
                         }
@@ -449,7 +449,7 @@ export default function EntityResolution() {
                       </button>
                       <button
                         className="btn btn-reject"
-                        onClick={() => handleReject(candidate.id)}
+                        onClick={() => handleReject(candidate.id ?? '')}
                         disabled={
                           mergeMutation.isPending || rejectMutation.isPending
                         }

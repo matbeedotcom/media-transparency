@@ -6,7 +6,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { autocompleteEntities, AutocompleteSuggestion } from '../../services/api';
+import { autocompleteEntities, type AutocompleteSuggestion } from '@/api';
 
 interface EntryPointFormProps {
   type: 'meta_ad' | 'corporation' | 'url' | 'text';
@@ -44,10 +44,10 @@ export function EntryPointForm({
 
     setIsLoading(true);
     try {
-      const types = type === 'meta_ad' ? 'sponsor,organization' : 'organization';
-      const result = await autocompleteEntities(query, { limit: 8, types });
-      setSuggestions(result.suggestions);
-      setShowSuggestions(result.suggestions.length > 0);
+      const entityType = type === 'meta_ad' ? 'sponsor,organization' : 'organization';
+      const result = await autocompleteEntities({ q: query, limit: 8, type: entityType });
+      setSuggestions(result.suggestions ?? []);
+      setShowSuggestions((result.suggestions?.length ?? 0) > 0);
       setSelectedIndex(-1);
     } catch (error) {
       console.error('Autocomplete error:', error);
@@ -72,7 +72,7 @@ export function EntryPointForm({
 
   // Select a suggestion
   const selectSuggestion = (suggestion: AutocompleteSuggestion) => {
-    onChange(suggestion.name);
+    onChange(suggestion.name ?? '');
     setSuggestions([]);
     setShowSuggestions(false);
     setSelectedIndex(-1);

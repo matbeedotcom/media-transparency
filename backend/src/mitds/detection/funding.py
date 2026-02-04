@@ -72,6 +72,7 @@ class FundingClusterDetector:
         self,
         entity_type: str | None = None,
         fiscal_year: int | None = None,
+        jurisdiction: str | None = None,
         limit: int = 50,
     ) -> list[FundingClusterResult]:
         """Detect funding clusters.
@@ -79,63 +80,55 @@ class FundingClusterDetector:
         Args:
             entity_type: Filter by entity type (OUTLET, ORGANIZATION)
             fiscal_year: Filter by fiscal year
+            jurisdiction: Filter by jurisdiction (e.g., 'CA' for Canada)
             limit: Maximum clusters to return
 
         Returns:
             List of detected funding clusters
         """
         async with get_neo4j_session() as session:
-            # Build entity type filter
-            entity_filter = ""
+            # Build WHERE clause conditions for recipient filtering
+            recipient_conditions = []
             if entity_type:
-                entity_filter = f"WHERE recipient:{entity_type}"
-
-            # Build fiscal year filter
-            year_filter = ""
+                recipient_conditions.append(f"recipient:{entity_type}")
             if fiscal_year:
-                year_filter = f"AND r.fiscal_year = {fiscal_year}"
+                recipient_conditions.append(f"r.fiscal_year = {fiscal_year}")
+            if jurisdiction:
+                # Use STARTS WITH to match both 'CA' and 'CA-ON', 'CA-BC', etc.
+                recipient_conditions.append(f"recipient.jurisdiction STARTS WITH '{jurisdiction}'")
 
-            # Find entities that share multiple funders
+            recipient_where = ""
+            if recipient_conditions:
+                recipient_where = "WHERE " + " AND ".join(recipient_conditions)
+
+            # Memory-efficient approach: start from funders with multiple recipients
+            # This avoids the expensive cartesian product of finding all recipient pairs
             query = f"""
-            // Find all recipient-funder pairs
+            // First, find funders that have multiple recipients (potential cluster centers)
+            MATCH (funder)<-[r:FUNDED_BY]-(recipient)
+            {recipient_where}
+            WITH funder, count(DISTINCT recipient) as recipient_count
+            WHERE recipient_count >= 2
+            
+            // Limit funders to avoid memory issues
+            ORDER BY recipient_count DESC
+            LIMIT 200
+            
+            // Now get the actual recipients for each funder
             MATCH (recipient)-[r:FUNDED_BY]->(funder)
-            {entity_filter}
-            {year_filter}
-            WITH recipient, funder, r.amount as amount, r.fiscal_year as year
-
-            // Group by recipient to get their funders
-            WITH recipient,
-                 collect(DISTINCT {{funder: funder, amount: amount, year: year}}) as funding_info
-
-            // For each pair of recipients, find shared funders
-            MATCH (other)-[r2:FUNDED_BY]->(shared_funder)
-            WHERE other <> recipient
-            AND shared_funder IN [f IN funding_info | f.funder]
-            {year_filter.replace('r.', 'r2.')}
-
-            // Count shared funders
-            WITH recipient, other,
-                 collect(DISTINCT shared_funder) as shared_funders,
-                 funding_info
-
-            WHERE size(shared_funders) >= {self.min_shared_funders}
-
-            // Return cluster info
-            RETURN
-                recipient,
-                other,
-                shared_funders,
-                size(shared_funders) as shared_count,
-                funding_info
-            ORDER BY shared_count DESC
+            {recipient_where}
+            
+            RETURN funder, collect(DISTINCT recipient) as recipients
+            ORDER BY size(recipients) DESC
             LIMIT {limit * 2}
             """
 
             result = await session.run(query)
             records = await result.data()
 
-            # Group into clusters
-            clusters = self._group_into_clusters(records)
+            # Build clusters from funder-recipient data
+            # Find recipients that share multiple funders
+            clusters = self._build_clusters_from_funders(records)
 
             # Calculate scores and return top clusters
             scored_clusters = []
@@ -167,20 +160,22 @@ class FundingClusterDetector:
             List of shared funders with their recipients
         """
         async with get_neo4j_session() as session:
-            entity_filter = ""
+            # Build WHERE clause conditions
+            where_conditions = []
             if entity_ids:
                 ids_str = "[" + ",".join(f"'{str(id)}'" for id in entity_ids) + "]"
-                entity_filter = f"WHERE recipient.id IN {ids_str}"
-
-            year_filter = ""
+                where_conditions.append(f"recipient.id IN {ids_str}")
             if fiscal_year:
-                year_filter = f"AND r.fiscal_year = {fiscal_year}"
+                where_conditions.append(f"r.fiscal_year = {fiscal_year}")
+
+            where_clause = ""
+            if where_conditions:
+                where_clause = "WHERE " + " AND ".join(where_conditions)
 
             query = f"""
             // Find all funders and their recipients
             MATCH (recipient)-[r:FUNDED_BY]->(funder)
-            {entity_filter}
-            {year_filter}
+            {where_clause}
 
             // Group by funder
             WITH funder,
@@ -375,6 +370,51 @@ class FundingClusterDetector:
                     shared_funder=shared_funder,
                     members=members,
                     total_funding=0.0,  # Would be calculated from relationships
+                    score=0.0,
+                    confidence=0.0,
+                )
+            )
+
+        return clusters
+
+    def _build_clusters_from_funders(
+        self, records: list[dict]
+    ) -> list[FundingClusterResult]:
+        """Build clusters from funder-centric query results.
+
+        This approach creates clusters where each cluster is centered around
+        a funder that funds multiple recipients.
+        """
+        clusters = []
+        cluster_num = 0
+
+        for record in records:
+            funder_node = record.get("funder")
+            recipients = record.get("recipients", [])
+
+            if not funder_node or len(recipients) < self.min_cluster_size:
+                continue
+
+            # Parse funder
+            funder = self._parse_entity_node(funder_node)
+
+            # Parse recipients
+            members = [
+                self._parse_entity_node(r)
+                for r in recipients
+                if r is not None
+            ]
+
+            if len(members) < self.min_cluster_size:
+                continue
+
+            cluster_num += 1
+            clusters.append(
+                FundingClusterResult(
+                    cluster_id=f"cluster_{cluster_num}",
+                    shared_funder=funder,
+                    members=members,
+                    total_funding=0.0,  # Could be calculated from relationships
                     score=0.0,
                     confidence=0.0,
                 )

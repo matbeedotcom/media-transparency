@@ -6,7 +6,10 @@
 
 import { useEffect, useRef, useCallback } from 'react';
 import cytoscape, { Core } from 'cytoscape';
-import { type FundingCluster as FundingClusterType, type EntitySummary } from '../../services/api';
+import { type FundingClustersResponseClustersItem, type EntitySummary } from '@/api';
+
+// Type alias for backward compatibility
+type FundingClusterType = FundingClustersResponseClustersItem;
 
 interface FundingClusterProps {
   cluster: FundingClusterType;
@@ -27,32 +30,38 @@ export default function FundingCluster({
   const buildElements = useCallback(() => {
     const elements: cytoscape.ElementDefinition[] = [];
 
-    // Add funder nodes (center column)
-    cluster.shared_funders.forEach((funder, index) => {
+    // Get the shared funder (if exists)
+    const funder = cluster.shared_funder;
+    const members = cluster.members ?? [];
+
+    // Add funder node (center)
+    if (funder) {
+      const funderName = funder.name ?? 'Unknown Funder';
       elements.push({
         data: {
-          id: funder.id,
-          label: funder.name.length > 25 ? funder.name.slice(0, 25) + '...' : funder.name,
-          fullLabel: funder.name,
+          id: funder.id ?? 'funder-unknown',
+          label: funderName.length > 25 ? funderName.slice(0, 25) + '...' : funderName,
+          fullLabel: funderName,
           type: 'funder',
-          entityType: funder.entity_type,
+          entityType: funder.entity_type ?? 'ORGANIZATION',
         },
         position: {
           x: 200,
-          y: 50 + index * 80,
+          y: 200,
         },
       });
-    });
+    }
 
-    // Add outlet nodes (right side)
-    cluster.outlets.forEach((outlet, index) => {
+    // Add member nodes (right side)
+    members.forEach((member: EntitySummary, index: number) => {
+      const memberName = member.name ?? 'Unknown Member';
       elements.push({
         data: {
-          id: outlet.id,
-          label: outlet.name.length > 25 ? outlet.name.slice(0, 25) + '...' : outlet.name,
-          fullLabel: outlet.name,
+          id: member.id ?? `member-${index}`,
+          label: memberName.length > 25 ? memberName.slice(0, 25) + '...' : memberName,
+          fullLabel: memberName,
           type: 'outlet',
-          entityType: outlet.entity_type,
+          entityType: member.entity_type ?? 'OUTLET',
         },
         position: {
           x: 400,
@@ -60,16 +69,16 @@ export default function FundingCluster({
         },
       });
 
-      // Connect each outlet to all funders
-      cluster.shared_funders.forEach((funder) => {
+      // Connect each member to the funder
+      if (funder) {
         elements.push({
           data: {
-            id: `${funder.id}-${outlet.id}`,
-            source: funder.id,
-            target: outlet.id,
+            id: `${funder.id}-${member.id}`,
+            source: funder.id ?? 'funder-unknown',
+            target: member.id ?? `member-${index}`,
           },
         });
-      });
+      }
     });
 
     return elements;
@@ -191,24 +200,28 @@ export default function FundingCluster({
     return `$${amount.toFixed(0)}`;
   };
 
+  const members = cluster.members ?? [];
+  const totalFunding = cluster.total_funding ?? 0;
+  const coordinationScore = cluster.score ?? 0;
+
   return (
     <div className="funding-cluster">
       <div className="cluster-header">
         <div className="cluster-stats">
           <div className="stat">
-            <span className="stat-value">{cluster.outlets.length}</span>
-            <span className="stat-label">Outlets</span>
+            <span className="stat-value">{members.length}</span>
+            <span className="stat-label">Members</span>
           </div>
           <div className="stat">
-            <span className="stat-value">{cluster.shared_funders.length}</span>
-            <span className="stat-label">Shared Funders</span>
+            <span className="stat-value">{cluster.shared_funder ? 1 : 0}</span>
+            <span className="stat-label">Shared Funder</span>
           </div>
           <div className="stat">
-            <span className="stat-value">{formatCurrency(cluster.total_shared_funding)}</span>
+            <span className="stat-value">{formatCurrency(totalFunding)}</span>
             <span className="stat-label">Total Funding</span>
           </div>
           <div className="stat">
-            <span className="stat-value">{(cluster.coordination_score * 100).toFixed(0)}%</span>
+            <span className="stat-value">{(coordinationScore * 100).toFixed(0)}%</span>
             <span className="stat-label">Coordination Score</span>
           </div>
         </div>

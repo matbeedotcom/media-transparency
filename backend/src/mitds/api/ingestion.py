@@ -104,13 +104,57 @@ class ReviewItem(BaseModel):
 # =========================
 
 
-@router.get("/search")
+class CompanySearchResultResponse(BaseModel):
+    """A single company search result."""
+
+    source: str
+    identifier: str
+    identifier_type: str
+    name: str
+    details: dict[str, Any] = {}
+    # Optional fields for extended info
+    jurisdiction: str | None = None
+    status: str | None = None
+    address: str | None = None
+    match_score: float | None = None
+
+
+class CompanySearchResponse(BaseModel):
+    """Response from company search."""
+
+    query: str
+    results: list[CompanySearchResultResponse]
+    sources_searched: list[str]
+    sources_failed: list[str] = []
+
+
+class SourceStatusItem(BaseModel):
+    """Status of a single data source."""
+    source: str
+    status: str
+    last_run_id: str | None = None
+    last_run_at: str | None = None
+    records_total: int = 0
+    last_records_processed: int = 0
+    error: str | None = None
+
+
+class IngestionStatusResponse(BaseModel):
+    """Response for ingestion status endpoint."""
+    sources: list[SourceStatusItem]
+    total_records: int
+    healthy_sources: int
+    total_sources: int
+    total: int
+
+
+@router.get("/search", response_model=CompanySearchResponse)
 async def search_companies(
     q: str,
     sources: str | None = None,
     limit: int = 10,
     user: OptionalUser = None,
-) -> dict[str, Any]:
+) -> CompanySearchResponse:
     """Search for companies across all data sources.
 
     Searches by company name, ticker, or identifier across SEC EDGAR,
@@ -133,13 +177,22 @@ async def search_companies(
         limit=min(limit, 50),
     )
 
-    return {
-        "query": result.query,
-        "results": [r.model_dump() for r in result.results],
-        "sources_searched": result.sources_searched,
-        "sources_failed": result.sources_failed,
-        "total": len(result.results),
-    }
+    return CompanySearchResponse(
+        query=result.query,
+        results=[
+            CompanySearchResultResponse(
+                source=r.source,
+                identifier=r.identifier,
+                identifier_type=r.identifier_type,
+                name=r.name,
+                details=r.details,
+            )
+            for r in result.results
+        ],
+        sources_searched=result.sources_searched,
+        sources_failed=result.sources_failed,
+        total=len(result.results),
+    )
 
 
 # =========================
@@ -262,10 +315,10 @@ async def autocomplete_entities(
 # =========================
 
 
-@router.get("/status")
+@router.get("/status", response_model=IngestionStatusResponse)
 async def get_ingestion_status(
     user: OptionalUser = None,
-) -> dict[str, Any]:
+) -> IngestionStatusResponse:
     """Get status of all data ingestion pipelines.
 
     Returns the health status, last run information, and

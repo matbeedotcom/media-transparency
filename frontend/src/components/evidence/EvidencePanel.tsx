@@ -7,7 +7,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { format } from 'date-fns';
-import { getEntityEvidence, type Evidence } from '../../services/api';
+import { getEntityEvidence, type Evidence } from '@/api';
 import SourceLink from './SourceLink';
 
 interface EvidencePanelProps {
@@ -134,7 +134,7 @@ export default function EvidencePanel({
 
       <ul className="evidence-list">
         {displayEvidence.map((item: Evidence) => {
-          const config = getTypeConfig(item.evidence_type);
+          const config = getTypeConfig(item.evidence_type ?? 'DEFAULT');
           return (
             <li key={item.id} className="evidence-item">
               <div className="evidence-header">
@@ -146,13 +146,13 @@ export default function EvidencePanel({
                   <span className="type-icon">{config.icon}</span>
                   {config.label}
                 </span>
-                <span className="evidence-date" title={item.retrieved_at}>
-                  {formatDate(item.retrieved_at)}
+                <span className="evidence-date" title={item.retrieved_at ?? ''}>
+                  {formatDate(item.retrieved_at ?? '')}
                 </span>
               </div>
               <div className="evidence-source">
                 <SourceLink
-                  url={item.source_url}
+                  url={item.source_url ?? ''}
                   archiveUrl={item.archive_url}
                 />
               </div>

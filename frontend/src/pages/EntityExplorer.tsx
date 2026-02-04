@@ -11,25 +11,26 @@ import {
   searchEntities,
   getEntity,
   getEntityRelationships,
-  getEntityBoardInterlocks,
+  getBoardInterlocks,
   getRelationshipChanges,
   getRelationshipTimeline,
   getFundingPaths,
   getFundingRecipients,
   getFundingSources,
-  getConnectingEntities,
+  findConnectingEntities,
   getSharedFunders,
-  quickIngestCorporation,
-  ingestLinkedIn,
+  quickIngest,
+  triggerLinkedInIngestion,
   getLinkedInStatus,
   type Entity,
   type Relationship,
   type BoardInterlock,
   type EntitySummary,
+  type LinkedInStatusResponse,
+  type EntityType,
   type QuickIngestResponse,
-  type LinkedInIngestionResponse,
-  type LinkedInStatus,
-} from '../services/api';
+  type QuickIngestResponseExternalMatchesItem,
+} from '@/api';
 import { EntityGraph, InfrastructureOverlap } from '../components/graph';
 import { EvidencePanel } from '../components/evidence';
 
@@ -100,7 +101,7 @@ export default function EntityExplorer() {
   const [linkedInCsvFile, setLinkedInCsvFile] = useState<File | null>(null);
   const [linkedInSessionCookie, setLinkedInSessionCookie] = useState('');
   const [linkedInTitlesFilter, setLinkedInTitlesFilter] = useState('CEO,CFO,Director,President,VP,Board');
-  const [linkedInStatus, setLinkedInStatus] = useState<LinkedInStatus | null>(null);
+  const [linkedInStatus, setLinkedInStatus] = useState<LinkedInStatusResponse | null>(null);
 
   // Search entities
   const { data: searchResults, isLoading: searchLoading } = useQuery({
@@ -108,7 +109,7 @@ export default function EntityExplorer() {
     queryFn: () =>
       searchEntities({
         q: searchParams.get('q') || undefined,
-        type: searchParams.get('type') || undefined,
+        type: (searchParams.get('type') as EntityType) || undefined,
         limit: pageSize,
         offset,
       }),
@@ -132,7 +133,7 @@ export default function EntityExplorer() {
   // Get board interlocks
   const { data: interlockData, isLoading: interlocksLoading } = useQuery({
     queryKey: ['entity-interlocks', id],
-    queryFn: () => getEntityBoardInterlocks(id!),
+    queryFn: () => getBoardInterlocks(id!),
     enabled: !!id && viewMode === 'interlocks',
   });
 
@@ -160,19 +161,19 @@ export default function EntityExplorer() {
   // Relationship changes
   const { data: relationshipChanges, isLoading: changesLoading } = useQuery({
     queryKey: ['relationship-changes', id, changesFromDate, changesToDate],
-    queryFn: () => getRelationshipChanges(id!, changesFromDate, changesToDate),
+    queryFn: () => getRelationshipChanges({ entity_id: id!, from_date: changesFromDate, to_date: changesToDate }),
     enabled: !!id && viewMode === 'changes',
   });
 
   // Relationship timeline (for a specific relationship)
   const { data: relTimeline } = useQuery({
-    queryKey: ['relationship-timeline', timelineRelationship?.source_entity.id, timelineRelationship?.target_entity.id, timelineRelationship?.rel_type],
+    queryKey: ['relationship-timeline', timelineRelationship?.source_entity?.id, timelineRelationship?.target_entity?.id, timelineRelationship?.rel_type],
     queryFn: () => getRelationshipTimeline({
-      source_id: timelineRelationship!.source_entity.id,
-      target_id: timelineRelationship!.target_entity.id,
-      rel_type: timelineRelationship!.rel_type,
+      source_id: timelineRelationship?.source_entity?.id ?? '',
+      target_id: timelineRelationship?.target_entity?.id ?? '',
+      rel_type: timelineRelationship?.rel_type || undefined,
     }),
-    enabled: !!timelineRelationship,
+    enabled: !!timelineRelationship && !!timelineRelationship.source_entity?.id && !!timelineRelationship.target_entity?.id,
   });
 
   // Connecting entities search
@@ -185,9 +186,8 @@ export default function EntityExplorer() {
   // Connecting entities query
   const { data: connectingData, isLoading: connectingLoading } = useQuery({
     queryKey: ['connecting-entities', connectorEntityIds.map((e) => e.id).join(','), connectorMaxHops],
-    queryFn: () => getConnectingEntities({
-      entity_ids: connectorEntityIds.map((e) => e.id).join(','),
-      max_hops: connectorMaxHops,
+    queryFn: () => findConnectingEntities({
+      entity_ids: connectorEntityIds.map((e) => e.id),
     }),
     enabled: showConnectorPanel && connectorEntityIds.length >= 2,
   });
@@ -203,14 +203,14 @@ export default function EntityExplorer() {
   const { data: sharedFundersData, isLoading: sharedFundersLoading } = useQuery({
     queryKey: ['shared-funders', sharedFunderIds.map((e) => e.id).join(',')],
     queryFn: () => getSharedFunders({
-      entity_ids: sharedFunderIds.map((e) => e.id).join(','),
+      entity_ids: sharedFunderIds.map((e) => e.id),
     }),
     enabled: showSharedFunders && sharedFunderIds.length >= 2,
   });
 
   // Quick ingest mutation
   const quickIngestMutation = useMutation({
-    mutationFn: quickIngestCorporation,
+    mutationFn: (data: Parameters<typeof quickIngest>[0]) => quickIngest(data),
     onSuccess: (data) => {
       setQuickIngestResult(data);
       if (data.found && data.entity_id) {
@@ -221,16 +221,18 @@ export default function EntityExplorer() {
   });
 
   // LinkedIn ingestion mutation
-  const [linkedInResult, setLinkedInResult] = useState<LinkedInIngestionResponse | null>(null);
+  const [linkedInResult, setLinkedInResult] = useState<{ run_id?: string; status?: string; message?: string; profiles_found?: number; executives_found?: number } | null>(null);
   const linkedInMutation = useMutation({
-    mutationFn: ingestLinkedIn,
+    mutationFn: (data: Parameters<typeof triggerLinkedInIngestion>[0]) => triggerLinkedInIngestion(data),
     onSuccess: (data) => {
-      setLinkedInResult(data);
-      if (data.status === 'completed' || data.status === 'running') {
-        // Refresh the entity to show new relationships
-        if (quickIngestResult?.entity_id) {
-          handleEntitySelect(quickIngestResult.entity_id);
-        }
+      setLinkedInResult({
+        run_id: data.run_id,
+        status: data.run_id ? 'running' : 'completed',
+        message: 'LinkedIn ingestion triggered',
+      });
+      // Refresh the entity to show new relationships
+      if (data.run_id && quickIngestResult?.entity_id) {
+        handleEntitySelect(quickIngestResult.entity_id);
       }
     },
   });
@@ -247,7 +249,9 @@ export default function EntityExplorer() {
   const handleOpenLinkedInModal = async () => {
     setShowLinkedInModal(true);
     try {
-      const status = await getLinkedInStatus();
+      // Pass entity ID if available, otherwise use a placeholder
+      const entityIdToCheck = id || quickIngestResult?.entity_id || 'status-check';
+      const status = await getLinkedInStatus(entityIdToCheck);
       setLinkedInStatus(status);
       // If cookie is configured on server, default to scrape method
       if (status.configured) {
@@ -392,7 +396,7 @@ export default function EntityExplorer() {
                 <div className="spinner" />
                 <span>Searching...</span>
               </div>
-            ) : searchResults?.results.length ? (
+            ) : searchResults?.results && searchResults.results.length > 0 ? (
               <ul className="entity-list">
                 {/* Deduplicate results by ID to prevent duplicate key warnings */}
                 {Array.from(
@@ -492,26 +496,29 @@ export default function EntityExplorer() {
                         </div>
                       )}
                       
-                      {quickIngestResult.sources_searched.length > 0 && (
+                      {quickIngestResult.sources_searched && quickIngestResult.sources_searched.length > 0 && (
                         <p className="text-muted sources-list">
                           Searched: {quickIngestResult.sources_searched.join(', ')}
                         </p>
                       )}
                       
                       {/* Show external matches if no direct ingestion */}
-                      {!quickIngestResult.found && quickIngestResult.external_matches.length > 0 && (
+                      {!quickIngestResult.found && quickIngestResult.external_matches && quickIngestResult.external_matches.length > 0 && (
                         <div className="external-matches">
                           <p>Possible matches found:</p>
                           <ul>
-                            {quickIngestResult.external_matches.map((match, i) => (
-                              <li key={i}>
-                                <strong>{match.name}</strong>
-                                <span className="match-source">({match.source})</span>
-                                {match.jurisdiction && (
-                                  <span className="match-jurisdiction">{match.jurisdiction}</span>
-                                )}
-                              </li>
-                            ))}
+                            {quickIngestResult.external_matches.map((match: QuickIngestResponseExternalMatchesItem, i: number) => {
+                              const jurisdiction = match.jurisdiction as string | undefined;
+                              return (
+                                <li key={i}>
+                                  <strong>{String(match.name || '')}</strong>
+                                  <span className="match-source">({String(match.source || '')})</span>
+                                  {jurisdiction && (
+                                    <span className="match-jurisdiction">{jurisdiction}</span>
+                                  )}
+                                </li>
+                              );
+                            })}
                           </ul>
                         </div>
                       )}
@@ -532,7 +539,7 @@ export default function EntityExplorer() {
             )}
 
             {/* Pagination */}
-            {searchResults && searchResults.total > pageSize && (
+            {searchResults && (searchResults.total ?? 0) > pageSize && (
               <div className="pagination-controls">
                 <button
                   type="button"
@@ -543,12 +550,12 @@ export default function EntityExplorer() {
                   Previous
                 </button>
                 <span className="pagination-info">
-                  {offset + 1}–{Math.min(offset + pageSize, searchResults.total)} of {searchResults.total}
+                  {offset + 1}–{Math.min(offset + pageSize, searchResults.total ?? 0)} of {searchResults.total ?? 0}
                 </span>
                 <button
                   type="button"
                   className="btn btn-secondary btn-sm"
-                  disabled={offset + pageSize >= searchResults.total}
+                  disabled={offset + pageSize >= (searchResults.total ?? 0)}
                   onClick={() => setOffset(offset + pageSize)}
                 >
                   Next
@@ -675,32 +682,32 @@ export default function EntityExplorer() {
                 {/* Relationships Summary */}
                 {relationships?.relationships && relationships.relationships.length > 0 && (
                   <div className="relationships-summary">
-                    <h4>Relationships ({relationships.total})</h4>
+                    <h4>Relationships ({relationships.total ?? 0})</h4>
                     <ul className="relationship-list">
                       {relationships.relationships.slice(0, 5).map((rel) => (
                         <li key={rel.id} className="relationship-item">
                           <span className="rel-type-badge" data-type={rel.rel_type}>{rel.rel_type}</span>
                           <span className="rel-direction">
-                            {rel.source_entity.id === id ? '→' : '←'}
+                            {rel.source_entity?.id === id ? '→' : '←'}
                           </span>
                           <a
                             href={`/entities/${
-                              rel.source_entity.id === id
-                                ? rel.target_entity.id
-                                : rel.source_entity.id
+                              rel.source_entity?.id === id
+                                ? rel.target_entity?.id
+                                : rel.source_entity?.id
                             }`}
                             onClick={(e) => {
                               e.preventDefault();
                               handleEntitySelect(
-                                rel.source_entity.id === id
-                                  ? rel.target_entity.id
-                                  : rel.source_entity.id
+                                rel.source_entity?.id === id
+                                  ? (rel.target_entity?.id ?? '')
+                                  : (rel.source_entity?.id ?? '')
                               );
                             }}
                           >
-                            {rel.source_entity.id === id
-                              ? rel.target_entity.name
-                              : rel.source_entity.name}
+                            {rel.source_entity?.id === id
+                              ? rel.target_entity?.name
+                              : rel.source_entity?.name}
                           </a>
                           <button
                             type="button"
@@ -721,11 +728,11 @@ export default function EntityExplorer() {
                       <div className="rel-timeline-panel">
                         <h5>
                           Timeline: {timelineRelationship.rel_type} —{' '}
-                          {timelineRelationship.source_entity.name} → {timelineRelationship.target_entity.name}
+                          {timelineRelationship.source_entity?.name} → {timelineRelationship.target_entity?.name}
                         </h5>
-                        {relTimeline.timeline.length > 0 ? (
+                        {relTimeline.periods && relTimeline.periods.length > 0 ? (
                           <ul className="timeline-periods">
-                            {relTimeline.timeline.map((period, i) => (
+                            {relTimeline.periods.map((period, i) => (
                               <li key={i} className="timeline-period">
                                 <span className="period-range">
                                   {period.valid_from || '?'} — {period.valid_to || 'present'}
@@ -748,7 +755,7 @@ export default function EntityExplorer() {
                         )}
                       </div>
                     )}
-                    {relationships.total > 5 && (
+                    {(relationships.total ?? 0) > 5 && (
                       <button
                         type="button"
                         className="btn btn-text"
@@ -883,23 +890,22 @@ export default function EntityExplorer() {
                       {connectingLoading && <div className="loading"><div className="spinner" /><span>Finding connectors...</span></div>}
                       {connectingData?.connecting_entities && connectingData.connecting_entities.length > 0 && (
                         <div className="connector-results">
-                          <h5>Connecting Entities ({connectingData.total})</h5>
+                          <h5>Connecting Entities ({connectingData.total_connectors ?? 0})</h5>
                           <ul className="connector-list">
                             {connectingData.connecting_entities.map((ce) => (
-                              <li key={ce.entity.id} className="connector-item">
+                              <li key={ce.id} className="connector-item">
                                 <a
-                                  href={`/entities/${ce.entity.id}`}
-                                  onClick={(e) => { e.preventDefault(); handleEntitySelect(ce.entity.id); }}
+                                  href={`/entities/${ce.id}`}
+                                  onClick={(e) => { e.preventDefault(); handleEntitySelect(ce.id ?? ''); }}
                                 >
-                                  {ce.entity.name}
+                                  {ce.name}
                                 </a>
-                                <span className="connector-count">{ce.connections} connections</span>
                               </li>
                             ))}
                           </ul>
                         </div>
                       )}
-                      {connectingData && connectingData.connecting_entities.length === 0 && (
+                      {connectingData && connectingData.connecting_entities && connectingData.connecting_entities.length === 0 && (
                         <p className="text-muted">No connecting entities found.</p>
                       )}
                     </div>
@@ -913,9 +919,9 @@ export default function EntityExplorer() {
                       <dt>Type</dt>
                       <dd>{selectedRelationship.rel_type}</dd>
                       <dt>From</dt>
-                      <dd>{selectedRelationship.source_entity.name}</dd>
+                      <dd>{selectedRelationship.source_entity?.name}</dd>
                       <dt>To</dt>
-                      <dd>{selectedRelationship.target_entity.name}</dd>
+                      <dd>{selectedRelationship.target_entity?.name}</dd>
                       {selectedRelationship.confidence && (
                         <>
                           <dt>Confidence</dt>
@@ -989,21 +995,20 @@ export default function EntityExplorer() {
                   ) : fundingSources?.funders && fundingSources.funders.length > 0 ? (
                     <table className="funding-table">
                       <thead>
-                        <tr><th>Funder</th><th>Amount</th><th>Year</th></tr>
+                        <tr><th>Funder</th><th>Amount</th></tr>
                       </thead>
                       <tbody>
                         {fundingSources.funders.map((f, i) => (
                           <tr key={i}>
                             <td>
                               <a
-                                href={`/entities/${f.entity.id}`}
-                                onClick={(e) => { e.preventDefault(); handleEntitySelect(f.entity.id); }}
+                                href={`/entities/${f.entity?.id}`}
+                                onClick={(e) => { e.preventDefault(); handleEntitySelect(f.entity?.id ?? ''); }}
                               >
-                                {f.entity.name}
+                                {f.entity?.name}
                               </a>
                             </td>
-                            <td>${f.amount.toLocaleString()}</td>
-                            <td>{f.fiscal_year}</td>
+                            <td>${(f.amount ?? 0).toLocaleString()}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -1021,21 +1026,20 @@ export default function EntityExplorer() {
                   ) : fundingRecipients?.recipients && fundingRecipients.recipients.length > 0 ? (
                     <table className="funding-table">
                       <thead>
-                        <tr><th>Recipient</th><th>Amount</th><th>Year</th></tr>
+                        <tr><th>Recipient</th><th>Amount</th></tr>
                       </thead>
                       <tbody>
                         {fundingRecipients.recipients.map((r, i) => (
                           <tr key={i}>
                             <td>
                               <a
-                                href={`/entities/${r.entity.id}`}
-                                onClick={(e) => { e.preventDefault(); handleEntitySelect(r.entity.id); }}
+                                href={`/entities/${r.entity?.id}`}
+                                onClick={(e) => { e.preventDefault(); handleEntitySelect(r.entity?.id ?? ''); }}
                               >
-                                {r.entity.name}
+                                {r.entity?.name}
                               </a>
                             </td>
-                            <td>${r.amount.toLocaleString()}</td>
-                            <td>{r.fiscal_year}</td>
+                            <td>${(r.amount ?? 0).toLocaleString()}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -1054,19 +1058,40 @@ export default function EntityExplorer() {
                     <ul className="funding-paths-list">
                       {fundingPaths.paths.map((path, i) => (
                         <li key={i} className="funding-path-item">
-                          {Array.isArray(path.entities) ? (
+                          {path.intermediaries && path.intermediaries.length > 0 ? (
                             <div className="path-chain">
-                              {(path.entities as Array<{ id: string; name: string }>).map((entity, j) => (
+                              {path.intermediaries.map((entity, j) => (
                                 <span key={j}>
                                   {j > 0 && <span className="path-arrow">→</span>}
                                   <a
                                     href={`/entities/${entity.id}`}
-                                    onClick={(e) => { e.preventDefault(); handleEntitySelect(entity.id); }}
+                                    onClick={(e) => { e.preventDefault(); handleEntitySelect(entity.id ?? ''); }}
                                   >
                                     {entity.name}
                                   </a>
                                 </span>
                               ))}
+                              {path.recipient && (
+                                <span>
+                                  <span className="path-arrow">→</span>
+                                  <a
+                                    href={`/entities/${path.recipient.id}`}
+                                    onClick={(e) => { e.preventDefault(); handleEntitySelect(path.recipient?.id ?? ''); }}
+                                  >
+                                    {path.recipient.name}
+                                  </a>
+                                </span>
+                              )}
+                            </div>
+                          ) : path.recipient ? (
+                            <div className="path-chain">
+                              <a
+                                href={`/entities/${path.recipient.id}`}
+                                onClick={(e) => { e.preventDefault(); handleEntitySelect(path.recipient?.id ?? ''); }}
+                              >
+                                {path.recipient.name}
+                              </a>
+                              <span className="text-muted"> ({path.hops ?? 0} hops, ${(path.total_amount ?? 0).toLocaleString()})</span>
                             </div>
                           ) : (
                             <span className="text-muted">Path {i + 1}</span>
@@ -1145,21 +1170,21 @@ export default function EntityExplorer() {
                           <tr key={i}>
                             <td>
                               <a
-                                href={`/entities/${sf.funder.id}`}
-                                onClick={(e) => { e.preventDefault(); handleEntitySelect(sf.funder.id); }}
+                                href={`/entities/${sf.funder?.id}`}
+                                onClick={(e) => { e.preventDefault(); handleEntitySelect(sf.funder?.id ?? ''); }}
                               >
-                                {sf.funder.name}
+                                {sf.funder?.name}
                               </a>
                             </td>
-                            <td>{sf.shared_count}</td>
-                            <td>${sf.total_funding.toLocaleString()}</td>
-                            <td>{(sf.funding_concentration * 100).toFixed(1)}%</td>
+                            <td>{sf.shared_count ?? 0}</td>
+                            <td>${(sf.total_funding ?? 0).toLocaleString()}</td>
+                            <td>{((sf.funding_concentration ?? 0) * 100).toFixed(1)}%</td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   )}
-                  {showSharedFunders && sharedFundersData && sharedFundersData.shared_funders.length === 0 && (
+                  {showSharedFunders && sharedFundersData?.shared_funders && sharedFundersData.shared_funders.length === 0 && (
                     <p className="text-muted">No shared funders found.</p>
                   )}
                 </div>
@@ -1182,11 +1207,11 @@ export default function EntityExplorer() {
                 ) : relationshipChanges ? (
                   <div className="changes-content">
                     {/* Added */}
-                    {relationshipChanges.added_relationships.length > 0 && (
+                    {relationshipChanges.added_relationships && relationshipChanges.added_relationships.length > 0 && (
                       <div className="changes-section">
                         <h4 className="changes-added">Added ({relationshipChanges.added_relationships.length})</h4>
                         <ul className="changes-list">
-                          {(relationshipChanges.added_relationships as Array<Record<string, unknown>>).map((rel, i) => (
+                          {(relationshipChanges.added_relationships as unknown as Array<Record<string, unknown>>).map((rel, i) => (
                             <li key={i} className="change-item added">
                               <span className="rel-type-badge">{String(rel.rel_type || 'UNKNOWN')}</span>
                               <span>
@@ -1202,11 +1227,11 @@ export default function EntityExplorer() {
                     )}
 
                     {/* Removed */}
-                    {relationshipChanges.removed_relationships.length > 0 && (
+                    {relationshipChanges.removed_relationships && relationshipChanges.removed_relationships.length > 0 && (
                       <div className="changes-section">
                         <h4 className="changes-removed">Removed ({relationshipChanges.removed_relationships.length})</h4>
                         <ul className="changes-list">
-                          {(relationshipChanges.removed_relationships as Array<Record<string, unknown>>).map((rel, i) => (
+                          {(relationshipChanges.removed_relationships as unknown as Array<Record<string, unknown>>).map((rel, i) => (
                             <li key={i} className="change-item removed">
                               <span className="rel-type-badge">{String(rel.rel_type || 'UNKNOWN')}</span>
                               <span>
@@ -1229,7 +1254,7 @@ export default function EntityExplorer() {
                           Modified ({(relationshipChanges.modified_relationships as unknown[]).length})
                         </h4>
                         <ul className="changes-list">
-                          {(relationshipChanges.modified_relationships as Array<Record<string, unknown>>).map(
+                          {(relationshipChanges.modified_relationships as unknown as Array<Record<string, unknown>>).map(
                             (rel, i) => (
                               <li key={i} className="change-item modified">
                                 <span className="rel-type-badge">{String(rel.rel_type || 'UNKNOWN')}</span>
@@ -1241,8 +1266,8 @@ export default function EntityExplorer() {
                       </div>
                     )}
 
-                    {relationshipChanges.added_relationships.length === 0 &&
-                      relationshipChanges.removed_relationships.length === 0 &&
+                    {(!relationshipChanges.added_relationships || relationshipChanges.added_relationships.length === 0) &&
+                      (!relationshipChanges.removed_relationships || relationshipChanges.removed_relationships.length === 0) &&
                       !(relationshipChanges.modified_relationships as unknown[] | undefined)?.length && (
                       <div className="empty-state">
                         <p>No relationship changes in this period.</p>
@@ -1265,36 +1290,36 @@ export default function EntityExplorer() {
                 ) : interlockData?.interlocks && interlockData.interlocks.length > 0 ? (
                   <>
                     <h3 className="interlocks-title">
-                      Shared Directors ({interlockData.total})
+                      Shared Directors ({interlockData.total ?? 0})
                     </h3>
                     <p className="interlocks-description">
                       Directors of this organization who also serve on other boards.
                     </p>
                     <ul className="interlocks-list">
-                      {interlockData.interlocks.map((interlock: BoardInterlock) => (
-                        <li key={interlock.director.id} className="interlock-item">
+                      {interlockData.interlocks.map((interlock: BoardInterlock, idx: number) => (
+                        <li key={interlock.director?.id ?? idx} className="interlock-item">
                           <div className="interlock-director">
                             <span className="entity-type-badge">PERSON</span>
                             <a
-                              href={`/entities/${interlock.director.id}`}
+                              href={`/entities/${interlock.director?.id}`}
                               onClick={(e) => {
                                 e.preventDefault();
-                                handleEntitySelect(interlock.director.id);
+                                handleEntitySelect(interlock.director?.id ?? '');
                               }}
                             >
-                              {interlock.director.name}
+                              {interlock.director?.name}
                             </a>
                           </div>
                           <div className="interlock-orgs">
                             <span className="interlock-orgs-label">Also directs:</span>
-                            {interlock.organizations.map((org) => (
+                            {interlock.organizations?.map((org) => (
                               <a
                                 key={org.id}
                                 href={`/entities/${org.id}`}
                                 className="interlock-org-link"
                                 onClick={(e) => {
                                   e.preventDefault();
-                                  handleEntitySelect(org.id);
+                                  handleEntitySelect(org.id ?? '');
                                 }}
                               >
                                 {org.name}

@@ -4,29 +4,35 @@
  * Displays entity match details for review.
  */
 
-import { type EntityMatchResponse } from '../../services/api';
+import { type EntityMatchResponse } from '@/api';
 
 interface MatchReviewProps {
   match: EntityMatchResponse;
 }
 
 export function MatchReview({ match }: MatchReviewProps) {
+  const sourceEntity = match.source_entity;
+  const targetEntity = match.target_entity;
+  const signals = match.match_signals;
+  const sourceIdentifiers = sourceEntity?.identifiers ?? {};
+  const targetIdentifiers = targetEntity?.identifiers ?? {};
+
   return (
     <div className="match-review">
       {/* Entities */}
       <div className="entities-comparison">
         <div className="entity-card source">
           <h4>Source Entity</h4>
-          <div className="entity-name">{match.source_entity.name}</div>
+          <div className="entity-name">{sourceEntity?.name ?? 'Unknown'}</div>
           <div className="entity-meta">
-            <span className="badge">{match.source_entity.entity_type}</span>
-            {match.source_entity.jurisdiction && (
-              <span className="badge">{match.source_entity.jurisdiction}</span>
+            <span className="badge">{sourceEntity?.entity_type ?? 'Unknown'}</span>
+            {sourceEntity?.jurisdiction && (
+              <span className="badge">{sourceEntity.jurisdiction}</span>
             )}
           </div>
-          {Object.keys(match.source_entity.identifiers).length > 0 && (
+          {Object.keys(sourceIdentifiers).length > 0 && (
             <div className="identifiers">
-              {Object.entries(match.source_entity.identifiers).map(([key, value]) => (
+              {Object.entries(sourceIdentifiers).map(([key, value]) => (
                 <div key={key} className="identifier">
                   <span className="id-key">{key}:</span>
                   <span className="id-value">{value}</span>
@@ -38,23 +44,23 @@ export function MatchReview({ match }: MatchReviewProps) {
 
         <div className="match-arrow">
           <span className="confidence-score">
-            {(match.confidence * 100).toFixed(0)}%
+            {((match.confidence ?? 0) * 100).toFixed(0)}%
           </span>
           <span className="arrow">⟷</span>
         </div>
 
         <div className="entity-card target">
           <h4>Target Entity</h4>
-          <div className="entity-name">{match.target_entity.name}</div>
+          <div className="entity-name">{targetEntity?.name ?? 'Unknown'}</div>
           <div className="entity-meta">
-            <span className="badge">{match.target_entity.entity_type}</span>
-            {match.target_entity.jurisdiction && (
-              <span className="badge">{match.target_entity.jurisdiction}</span>
+            <span className="badge">{targetEntity?.entity_type ?? 'Unknown'}</span>
+            {targetEntity?.jurisdiction && (
+              <span className="badge">{targetEntity.jurisdiction}</span>
             )}
           </div>
-          {Object.keys(match.target_entity.identifiers).length > 0 && (
+          {Object.keys(targetIdentifiers).length > 0 && (
             <div className="identifiers">
-              {Object.entries(match.target_entity.identifiers).map(([key, value]) => (
+              {Object.entries(targetIdentifiers).map(([key, value]) => (
                 <div key={key} className="identifier">
                   <span className="id-key">{key}:</span>
                   <span className="id-value">{value}</span>
@@ -66,51 +72,53 @@ export function MatchReview({ match }: MatchReviewProps) {
       </div>
 
       {/* Match Signals */}
+      {signals && (
       <div className="match-signals">
         <h4>Match Signals</h4>
         <div className="signals-grid">
-          {match.match_signals.name_similarity !== null && (
+          {signals.name_similarity != null && (
             <div className="signal">
               <span className="signal-label">Name Similarity</span>
               <span className="signal-value">
-                {(match.match_signals.name_similarity * 100).toFixed(0)}%
+                {((signals.name_similarity ?? 0) * 100).toFixed(0)}%
               </span>
             </div>
           )}
-          {match.match_signals.identifier_match && (
+          {signals.identifier_match && (
             <div className="signal">
               <span className="signal-label">Identifier Match</span>
               <span className="signal-value">
-                {match.match_signals.identifier_match.type}:{' '}
-                {match.match_signals.identifier_match.matched ? '✓' : '✗'}
+                {signals.identifier_match.type ?? 'Unknown'}:{' '}
+                {signals.identifier_match.matched ? '✓' : '✗'}
               </span>
             </div>
           )}
           <div className="signal">
             <span className="signal-label">Jurisdiction Match</span>
             <span className="signal-value">
-              {match.match_signals.jurisdiction_match ? '✓ Yes' : '✗ No'}
+              {signals.jurisdiction_match ? '✓ Yes' : '✗ No'}
             </span>
           </div>
-          {match.match_signals.address_overlap && (
+          {signals.address_overlap && (
             <div className="signal">
               <span className="signal-label">Address Overlap</span>
               <span className="signal-value">
-                City: {match.match_signals.address_overlap.city ? '✓' : '✗'},{' '}
-                Postal: {match.match_signals.address_overlap.postal_fsa ? '✓' : '✗'}
+                City: {signals.address_overlap.city ? '✓' : '✗'},{' '}
+                Postal: {signals.address_overlap.postal_fsa ? '✓' : '✗'}
               </span>
             </div>
           )}
-          {match.match_signals.shared_directors && match.match_signals.shared_directors.length > 0 && (
+          {(signals.shared_directors?.length ?? 0) > 0 && (
             <div className="signal">
               <span className="signal-label">Shared Directors</span>
               <span className="signal-value">
-                {match.match_signals.shared_directors.join(', ')}
+                {(signals.shared_directors ?? []).join(', ')}
               </span>
             </div>
           )}
         </div>
       </div>
+      )}
 
       <style>{`
         .match-review {

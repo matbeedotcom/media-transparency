@@ -11,12 +11,12 @@ import {
   getIngestionStatus,
   searchEntities,
   type IngestionStatus,
-} from '../services/api';
+} from '@/api';
 
 export default function Dashboard() {
   const { data: ingestionData, isLoading: ingestionLoading } = useQuery({
     queryKey: ['ingestion-status'],
-    queryFn: getIngestionStatus,
+    queryFn: ({ signal }) => getIngestionStatus(signal),
     refetchInterval: 60000,
   });
 
@@ -143,10 +143,10 @@ export default function Dashboard() {
                 </tr>
               </thead>
               <tbody>
-                {ingestionData?.sources.map((source) => (
+                {(ingestionData?.sources ?? []).map((source) => (
                   <tr key={source.source}>
                     <td>
-                      <strong>{source.source.toUpperCase()}</strong>
+                      <strong>{(source.source ?? '').toUpperCase()}</strong>
                     </td>
                     <td className={getStatusColor(source.status)}>
                       {getStatusIcon(source.status)} {source.status}

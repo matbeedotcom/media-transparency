@@ -200,21 +200,66 @@ QuickIngestResponse:
 # Search results
 CompanySearchResult:
   type: object
+  required:
+    - source
+    - identifier
+    - identifier_type
+    - name
   properties:
-    name:
-      type: string
     source:
       type: string
+      description: Data source name (e.g., canada_corps, irs990, cra)
     identifier:
       type: string
+      description: Source-specific identifier (corporation number, EIN, BN, etc.)
+    identifier_type:
+      type: string
+      description: Type of identifier (e.g., Corporation Number, EIN, BN, CIK)
+    name:
+      type: string
+      description: Company/organization name
+    details:
+      type: object
+      additionalProperties: true
+      description: Source-specific additional details
+    # Legacy/optional fields for backward compatibility
     jurisdiction:
       type: string
     match_score:
       type: number
-    entity_id:
+    status:
       type: string
-      format: uuid
-      description: Existing entity ID if matched
+    address:
+      type: string
+
+CompanySearchResponse:
+  type: object
+  required:
+    - query
+    - results
+    - sources_searched
+  properties:
+    query:
+      type: string
+      description: The search query
+    results:
+      type: array
+      items:
+        $ref: '#/CompanySearchResult'
+      description: Search results from all sources
+    sources_searched:
+      type: array
+      items:
+        type: string
+      description: List of sources that were searched
+    sources_failed:
+      type: array
+      items:
+        type: string
+      description: List of sources that failed to respond
+    total:
+      type: integer
+      description: Total number of results
 
 AutocompleteSuggestion:
   type: object

@@ -7,7 +7,25 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import cytoscape, { Core, NodeSingular, EdgeSingular, Layouts } from 'cytoscape';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { getEntityRelationships, getGraphAtTime, findAllPaths, type Relationship, type PathResult } from '../../services/api';
+import { getEntityRelationships, getGraphAtTime, findAllPaths, type Relationship, type AllPathsResponsePathsItem, type EntityType, type RelationType } from '@/api';
+
+// Type alias for backward compatibility
+type PathResult = AllPathsResponsePathsItem;
+
+// Type for temporal relationship data (OpenAPI spec incomplete)
+interface TemporalRelationship {
+  id?: string;
+  rel_type?: string;
+  source?: { id?: string; entity_type?: string; name?: string };
+  target?: { id?: string; entity_type?: string; name?: string };
+  valid_from?: string;
+  valid_to?: string;
+}
+
+// Type for path relationship data
+interface PathRelationship {
+  id?: string;
+}
 
 // Node color mapping by entity type
 const NODE_COLORS: Record<string, string> = {
@@ -80,8 +98,8 @@ export default function EntityGraph({
   // Path finding mutation
   const pathMutation = useMutation({
     mutationFn: async ({ from, to }: { from: string; to: string }) => {
-      const result = await findAllPaths(from, to, { maxHops: 5, limit: 5 });
-      return result.paths || [];
+      const result = await findAllPaths({ from_id: from, to_id: to, max_hops: 5, limit: 5 });
+      return result.paths ?? [];
     },
     onSuccess: (paths) => {
       setFoundPaths(paths);
@@ -98,13 +116,14 @@ export default function EntityGraph({
     queryFn: async () => {
       if (asOf) {
         // Use temporal query
-        const temporalData = await getGraphAtTime(entityId, asOf, { depth: maxHops });
+        const temporalData = await getGraphAtTime(entityId, { as_of: asOf, depth: maxHops });
         // Transform temporal data to match relationship data structure
-        const mappedRels: Relationship[] = (temporalData.relationships || []).map((r) => ({
-          id: r.id,
-          rel_type: r.rel_type,
-          source_entity: r.source,
-          target_entity: r.target,
+        const temporalRels = (temporalData.relationships ?? []) as TemporalRelationship[];
+        const mappedRels: Relationship[] = temporalRels.map((r) => ({
+          id: r.id ?? '',
+          rel_type: (r.rel_type ?? 'OWNS') as RelationType,
+          source_entity: { id: r.source?.id ?? '', entity_type: (r.source?.entity_type ?? 'ORGANIZATION') as EntityType, name: r.source?.name ?? '' },
+          target_entity: { id: r.target?.id ?? '', entity_type: (r.target?.entity_type ?? 'ORGANIZATION') as EntityType, name: r.target?.name ?? '' },
           confidence: 1,
           properties: {},
           valid_from: r.valid_from,
@@ -131,31 +150,34 @@ export default function EntityGraph({
       const edges: GraphEdge[] = [];
 
       relationships.forEach((rel) => {
+        const sourceId = rel.source_entity?.id ?? '';
+        const targetId = rel.target_entity?.id ?? '';
+        
         // Add source node
-        if (!nodesMap.has(rel.source_entity.id)) {
-          nodesMap.set(rel.source_entity.id, {
-            id: rel.source_entity.id,
-            label: rel.source_entity.name,
-            type: rel.source_entity.entity_type,
+        if (sourceId && !nodesMap.has(sourceId)) {
+          nodesMap.set(sourceId, {
+            id: sourceId,
+            label: rel.source_entity?.name ?? 'Unknown',
+            type: rel.source_entity?.entity_type ?? 'ORGANIZATION',
           });
         }
 
         // Add target node
-        if (!nodesMap.has(rel.target_entity.id)) {
-          nodesMap.set(rel.target_entity.id, {
-            id: rel.target_entity.id,
-            label: rel.target_entity.name,
-            type: rel.target_entity.entity_type,
+        if (targetId && !nodesMap.has(targetId)) {
+          nodesMap.set(targetId, {
+            id: targetId,
+            label: rel.target_entity?.name ?? 'Unknown',
+            type: rel.target_entity?.entity_type ?? 'ORGANIZATION',
           });
         }
 
         // Add edge
         edges.push({
-          id: rel.id,
-          source: rel.source_entity.id,
-          target: rel.target_entity.id,
-          type: rel.rel_type,
-          properties: rel.properties,
+          id: rel.id ?? '',
+          source: sourceId,
+          target: targetId,
+          type: rel.rel_type ?? '',
+          properties: rel.properties as Record<string, unknown>,
         });
       });
 
@@ -403,16 +425,16 @@ export default function EntityGraph({
     if (!path) return;
 
     // Highlight nodes in path
-    path.nodes.forEach((node) => {
-      const cyNode = cyRef.current?.getElementById(node.id);
+    (path.nodes ?? []).forEach((node) => {
+      const cyNode = cyRef.current?.getElementById(node.id ?? '');
       if (cyNode) {
         cyNode.addClass('path-highlight');
       }
     });
 
     // Highlight edges in path
-    path.relationships.forEach((rel) => {
-      const cyEdge = cyRef.current?.getElementById(rel.id);
+    ((path.relationships ?? []) as PathRelationship[]).forEach((rel) => {
+      const cyEdge = cyRef.current?.getElementById(rel.id ?? '');
       if (cyEdge) {
         cyEdge.addClass('path-highlight');
       }
@@ -539,8 +561,8 @@ export default function EntityGraph({
                       if (onPathFound) onPathFound(path);
                     }}
                   >
-                    {index + 1}: {path.path_length} hop{path.path_length > 1 ? 's' : ''} via{' '}
-                    {path.path_types.join(' → ')}
+                    {index + 1}: {path.path_length ?? 0} hop{(path.path_length ?? 0) > 1 ? 's' : ''} via{' '}
+                    {(path.path_types ?? []).join(' → ')}
                   </button>
                 ))}
               </div>

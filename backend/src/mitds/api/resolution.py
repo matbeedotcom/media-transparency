@@ -50,6 +50,29 @@ class ResolutionStatsResponse(BaseModel):
     by_strategy: dict[str, int]
 
 
+class ResolutionActionResponse(BaseModel):
+    """Response for resolution actions (merge/reject)."""
+    id: str
+    status: str
+    resolution: str
+    reviewer: str
+
+
+class ResolutionTriggerResponse(BaseModel):
+    """Response for resolution trigger."""
+    candidates_found: int
+    dry_run: bool
+    message: str
+
+
+class CandidatesListResponse(BaseModel):
+    """Paginated list of resolution candidates."""
+    results: list[CandidateResponse]
+    total: int
+    limit: int
+    offset: int
+
+
 # =========================
 # List Candidates
 # =========================
@@ -126,11 +149,11 @@ async def list_candidates(
 # =========================
 
 
-@router.post("/candidates/{candidate_id}/merge")
+@router.post("/candidates/{candidate_id}/merge", response_model=ResolutionActionResponse)
 async def merge_candidate(
     candidate_id: UUID,
     user: OptionalUser = None,
-):
+) -> ResolutionActionResponse:
     """Approve and merge a resolution candidate."""
     from ..resolution.reconcile import ReconciliationQueue
 
@@ -164,11 +187,11 @@ async def merge_candidate(
 # =========================
 
 
-@router.post("/candidates/{candidate_id}/reject")
+@router.post("/candidates/{candidate_id}/reject", response_model=ResolutionActionResponse)
 async def reject_candidate(
     candidate_id: UUID,
     user: OptionalUser = None,
-):
+) -> ResolutionActionResponse:
     """Reject a resolution candidate."""
     from ..resolution.reconcile import ReconciliationQueue
 
@@ -202,12 +225,12 @@ async def reject_candidate(
 # =========================
 
 
-@router.post("/trigger")
+@router.post("/trigger", response_model=ResolutionTriggerResponse)
 async def trigger_resolution(
     entity_type: str = Query("all", pattern="^(Organization|Person|Outlet|all)$"),
     dry_run: bool = Query(False),
     user: OptionalUser = None,
-):
+) -> ResolutionTriggerResponse:
     """Trigger a resolution run."""
     from ..resolution.resolver import EntityResolver
 
@@ -237,10 +260,10 @@ async def trigger_resolution(
 # =========================
 
 
-@router.get("/stats")
+@router.get("/stats", response_model=ResolutionStatsResponse)
 async def resolution_stats(
     user: OptionalUser = None,
-):
+) -> ResolutionStatsResponse:
     """Get resolution queue statistics."""
     from ..resolution.reconcile import ReconciliationQueue
 

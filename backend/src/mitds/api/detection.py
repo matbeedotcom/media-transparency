@@ -85,6 +85,7 @@ class FundingClusterRequest(BaseModel):
 
     entity_type: str | None = Field(None, description="Filter by entity type (Organization, Person, Outlet)")
     fiscal_year: int | None = Field(None, description="Filter by fiscal year")
+    jurisdiction: str | None = Field(None, description="Filter by jurisdiction (e.g., 'CA' for Canada)")
     min_shared_funders: int = Field(2, ge=1, description="Minimum shared funders to form a cluster")
     limit: int = Field(50, ge=1, le=500, description="Maximum clusters to return")
 
@@ -441,6 +442,7 @@ async def detect_funding_clusters(
         results = await detector.detect_clusters(
             entity_type=request.entity_type,
             fiscal_year=request.fiscal_year,
+            jurisdiction=request.jurisdiction,
             limit=request.limit,
         )
 
@@ -477,6 +479,180 @@ async def detect_funding_clusters(
     except Exception as e:
         logger.exception("Funding cluster detection failed")
         raise HTTPException(status_code=500, detail=f"Funding cluster detection failed: {e}")
+
+
+# =========================
+# Politically Active Funded Entities
+# =========================
+
+
+class PoliticallyActiveFundedRequest(BaseModel):
+    """Request for finding funded entities with political activity."""
+
+    jurisdiction: str | None = Field("CA", description="Filter recipients by jurisdiction (e.g., 'CA' for Canada)")
+    min_funding: float = Field(0, ge=0, description="Minimum total funding received")
+    fiscal_year: int | None = Field(None, description="Filter funding by fiscal year")
+    include_lobbying: bool = Field(True, description="Include entities that lobby")
+    include_political_ads: bool = Field(True, description="Include entities that sponsor political ads")
+    limit: int = Field(100, ge=1, le=500, description="Maximum results")
+
+
+class PoliticallyActiveFundedResult(BaseModel):
+    """A funded entity with political activity."""
+
+    entity_id: str
+    entity_name: str
+    entity_type: str | None = None
+    jurisdiction: str | None = None
+    total_funding: float = 0
+    funder_count: int = 0
+    funders: list[dict[str, Any]] = Field(default_factory=list)
+    has_political_ads: bool = False
+    political_ad_count: int = 0
+    political_ad_spend: float = 0
+    has_lobbying: bool = False
+    lobbying_count: int = 0
+
+
+class PoliticallyActiveFundedResponse(BaseModel):
+    """Response for politically active funded entities."""
+
+    results: list[PoliticallyActiveFundedResult] = Field(default_factory=list)
+    total_results: int = 0
+    explanation: str = ""
+
+
+@router.post("/politically-active-funded")
+async def detect_politically_active_funded(
+    request: PoliticallyActiveFundedRequest,
+    user: OptionalUser = None,
+) -> PoliticallyActiveFundedResponse:
+    """Find entities that receive funding AND are politically active.
+
+    Identifies organizations that:
+    1. Receive funding (via FUNDED_BY relationships)
+    2. AND sponsor political ads (via SPONSORED_BY) OR lobby
+
+    This helps detect potential influence campaigns where funding flows
+    to entities that then engage in political activity.
+    """
+    try:
+        async with get_neo4j_session() as session:
+            # Build jurisdiction filter
+            jurisdiction_filter = ""
+            if request.jurisdiction:
+                jurisdiction_filter = f"AND recipient.jurisdiction STARTS WITH '{request.jurisdiction}'"
+
+            # Build fiscal year filter
+            year_filter = ""
+            if request.fiscal_year:
+                year_filter = f"AND funding.fiscal_year = {request.fiscal_year}"
+
+            # Query for entities that receive funding AND have political activity
+            query = f"""
+            // Find entities that receive funding
+            MATCH (recipient)<-[funding:FUNDED_BY]-(funder)
+            WHERE recipient.jurisdiction IS NOT NULL
+            {jurisdiction_filter}
+            {year_filter}
+
+            // Aggregate funding info
+            WITH recipient,
+                 sum(COALESCE(funding.amount, 0)) as total_funding,
+                 count(DISTINCT funder) as funder_count,
+                 collect(DISTINCT {{
+                     id: funder.id,
+                     name: funder.name,
+                     jurisdiction: funder.jurisdiction,
+                     amount: funding.amount
+                 }})[0..5] as top_funders
+
+            WHERE total_funding >= {request.min_funding}
+
+            // Check for political ads (SPONSORED_BY relationship)
+            OPTIONAL MATCH (recipient)<-[:SPONSORED_BY]-(ad)
+            WITH recipient, total_funding, funder_count, top_funders,
+                 count(DISTINCT ad) as ad_count,
+                 sum(COALESCE(ad.spend, 0)) as ad_spend
+
+            // Check for lobbying activity
+            OPTIONAL MATCH (recipient)-[:LOBBIES|LOBBIED_BY]->(lobby_target)
+            WITH recipient, total_funding, funder_count, top_funders,
+                 ad_count, ad_spend,
+                 count(DISTINCT lobby_target) as lobby_count
+
+            // Filter to only politically active entities
+            WHERE (ad_count > 0 OR lobby_count > 0)
+
+            RETURN
+                recipient.id as entity_id,
+                recipient.name as entity_name,
+                recipient.entity_type as entity_type,
+                recipient.jurisdiction as jurisdiction,
+                total_funding,
+                funder_count,
+                top_funders as funders,
+                ad_count > 0 as has_political_ads,
+                ad_count as political_ad_count,
+                ad_spend as political_ad_spend,
+                lobby_count > 0 as has_lobbying,
+                lobby_count as lobbying_count
+
+            ORDER BY total_funding DESC
+            LIMIT {request.limit}
+            """
+
+            result = await session.run(query)
+            records = await result.data()
+
+            results = []
+            for record in records:
+                # Apply include filters
+                has_ads = record.get("has_political_ads", False)
+                has_lobbying = record.get("has_lobbying", False)
+
+                if not request.include_political_ads and has_ads and not has_lobbying:
+                    continue
+                if not request.include_lobbying and has_lobbying and not has_ads:
+                    continue
+
+                results.append(PoliticallyActiveFundedResult(
+                    entity_id=record.get("entity_id", ""),
+                    entity_name=record.get("entity_name", "Unknown"),
+                    entity_type=record.get("entity_type"),
+                    jurisdiction=record.get("jurisdiction"),
+                    total_funding=record.get("total_funding", 0),
+                    funder_count=record.get("funder_count", 0),
+                    funders=record.get("funders", []),
+                    has_political_ads=has_ads,
+                    political_ad_count=record.get("political_ad_count", 0),
+                    political_ad_spend=record.get("political_ad_spend", 0),
+                    has_lobbying=has_lobbying,
+                    lobbying_count=record.get("lobbying_count", 0),
+                ))
+
+            total = len(results)
+            if total == 0:
+                explanation = "No funded entities with political activity found matching the criteria."
+            else:
+                ads_count = sum(1 for r in results if r.has_political_ads)
+                lobby_count = sum(1 for r in results if r.has_lobbying)
+                total_funding = sum(r.total_funding for r in results)
+                explanation = (
+                    f"Found {total} funded entities with political activity. "
+                    f"{ads_count} sponsor political ads, {lobby_count} have lobbying activity. "
+                    f"Total funding: ${total_funding:,.0f}"
+                )
+
+            return PoliticallyActiveFundedResponse(
+                results=results,
+                total_results=total,
+                explanation=explanation,
+            )
+
+    except Exception as e:
+        logger.exception("Politically active funded detection failed")
+        raise HTTPException(status_code=500, detail=f"Detection failed: {e}")
 
 
 # =========================

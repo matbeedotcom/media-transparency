@@ -43,22 +43,262 @@ router = APIRouter(prefix="/relationships")
 # =========================
 
 
+class EntityNodeResponse(BaseModel):
+    """Entity node in a path."""
+    id: str
+    name: str
+    entity_type: str
+    properties: dict[str, Any] = Field(default_factory=dict)
+
+    class Config:
+        from_attributes = True
+
+
+class RelationshipInPath(BaseModel):
+    """Relationship in a path."""
+    id: str
+    rel_type: str
+    source_id: str
+    target_id: str
+    properties: dict[str, Any] = Field(default_factory=dict)
+
+    class Config:
+        from_attributes = True
+
+
 class PathResponse(BaseModel):
     """Path between two entities."""
 
-    source: EntityNode
-    target: EntityNode
+    source: EntityNodeResponse
+    target: EntityNodeResponse
     hops: int
-    path_nodes: list[EntityNode] = Field(default_factory=list)
-    path_edges: list[dict[str, Any]] = Field(default_factory=list)
+    path_nodes: list[EntityNodeResponse] = Field(default_factory=list)
+    path_edges: list[RelationshipInPath] = Field(default_factory=list)
+
+
+class FindPathResponse(BaseModel):
+    """Response for find_paths endpoint."""
+    path_found: bool
+    from_entity: EntityNodeResponse | dict[str, str]
+    to_entity: EntityNodeResponse | dict[str, str]
+    hops: int | None = None
+    intermediaries: list[EntityNodeResponse] = Field(default_factory=list)
+    relationships: list[RelationshipInPath] = Field(default_factory=list)
+    paths: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class AllPathsResponseItem(BaseModel):
+    """Single path in all paths response."""
+    source: EntityNodeResponse
+    target: EntityNodeResponse
+    path_length: int
+    path_types: list[str]
+    nodes: list[EntityNodeResponse]
+    relationships: list[RelationshipInPath]
+
+
+class AllPathsResponse(BaseModel):
+    """Response for find_all_paths endpoint."""
+    from_entity_id: str
+    to_entity_id: str
+    paths_found: int
+    paths: list[AllPathsResponseItem]
+
+
+class ConnectingEntityItem(BaseModel):
+    """Entity connecting multiple other entities."""
+    entity: EntityNodeResponse
+    connections: int
+    connected_to: list[str]
+    relationship_types: list[str]
+
+
+class ConnectingEntitiesResponse(BaseModel):
+    """Response for connecting entities endpoint."""
+    query_entity_ids: list[str]
+    connecting_entities: list[ConnectingEntityItem]
+    total: int
+
+
+class GraphAtTimeResponse(BaseModel):
+    """Response for graph-at-time endpoint."""
+    entity_id: str
+    as_of: str
+    nodes: list[EntityNodeResponse]
+    relationships: list[RelationshipInPath]
+    total: int
+
+
+class RelationshipChange(BaseModel):
+    """A change in a relationship."""
+    relationship_id: str
+    rel_type: str
+    change_type: str  # 'added', 'removed', 'modified'
+    source: EntityNodeResponse
+    target: EntityNodeResponse
+    old_properties: dict[str, Any] | None = None
+    new_properties: dict[str, Any] | None = None
+
+
+class RelationshipChangesResponse(BaseModel):
+    """Response for relationship changes endpoint."""
+    entity_id: str
+    from_date: str
+    to_date: str
+    changes: list[RelationshipChange]
+    total: int
+    summary: dict[str, int] = Field(default_factory=dict)
+
+
+class TimelinePeriod(BaseModel):
+    """A period in the timeline."""
+    start_date: str
+    end_date: str | None = None
+    properties: dict[str, Any]
+
+
+class RelationshipTimelineResponse(BaseModel):
+    """Response for relationship timeline endpoint."""
+    source_id: str
+    target_id: str
+    rel_type: str
+    periods: list[TimelinePeriod]
+    total: int
+
+
+class FundingPathItem(BaseModel):
+    """Funding path from funder to recipient."""
+    funder: EntityNodeResponse
+    recipient: EntityNodeResponse
+    hops: int
+    total_amount: float | None = None
+    intermediaries: list[EntityNodeResponse]
+    relationships: list[RelationshipInPath]
+
+
+class FundingPathsResponse(BaseModel):
+    """Response for funding paths endpoint."""
+    funder_id: str
+    paths: list[FundingPathItem]
+    total: int
+
+
+class FundingRecipient(BaseModel):
+    """A recipient of funding."""
+    recipient: EntityNodeResponse
+    amount: float | None = None
+    relationship_count: int
+    first_funding: str | None = None
+    last_funding: str | None = None
+
+
+class FundingRecipientsResponse(BaseModel):
+    """Response for funding recipients endpoint."""
+    funder_id: str
+    recipients: list[FundingRecipient]
+    total: int
+
+
+class FundingSource(BaseModel):
+    """A source of funding."""
+    funder: EntityNodeResponse
+    amount: float | None = None
+    relationship_count: int
+    first_funding: str | None = None
+    last_funding: str | None = None
+
+
+class FundingSourcesResponse(BaseModel):
+    """Response for funding sources endpoint."""
+    recipient_id: str
+    funders: list[FundingSource]
+    total: int
+
+
+class FundingClusterItem(BaseModel):
+    """A funding cluster."""
+    cluster_id: str
+    shared_funder: EntityNodeResponse
+    members: list[EntityNodeResponse]
+    total_funding: float
+    score: float
+    concentration: float
+
+
+class FundingClustersResponse(BaseModel):
+    """Response for funding clusters endpoint."""
+    entity_ids: list[str]
+    min_shared_funders: int
+    clusters: list[FundingClusterItem]
+    total: int
+    parameters: dict[str, Any] = Field(default_factory=dict)
+
+
+class SharedFunderItem(BaseModel):
+    """A shared funder."""
+    funder: EntityNodeResponse
+    recipients: list[EntityNodeResponse]
+    shared_count: int
+    total_funding: float
+    concentration: float
+
+
+class SharedFundersResponse(BaseModel):
+    """Response for shared funders endpoint."""
+    entity_ids: list[str]
+    shared_funders: list[SharedFunderItem]
+    total: int
+    parameters: dict[str, Any] = Field(default_factory=dict)
+
+
+class InfrastructureSignal(BaseModel):
+    """An infrastructure sharing signal."""
+    signal_type: str
+    value: str
+    confidence: float
+
+
+class InfrastructureMatch(BaseModel):
+    """Infrastructure match between entities."""
+    entity_a: EntityNodeResponse
+    entity_b: EntityNodeResponse
+    signals: list[InfrastructureSignal]
+    score: float
+
+
+class SharedInfrastructureResponse(BaseModel):
+    """Response for shared infrastructure endpoint."""
+    entity_ids: list[str]
+    matches: list[InfrastructureMatch]
+    total: int
+    parameters: dict[str, Any] = Field(default_factory=dict)
+
+
+class DomainProfile(BaseModel):
+    """Domain infrastructure profile."""
+    domain: str
+    registrar: str | None = None
+    hosting: str | None = None
+    nameservers: list[str] = Field(default_factory=list)
+    analytics_ids: list[str] = Field(default_factory=list)
+    ssl_issuer: str | None = None
+
+
+class InfrastructureAnalysisResponse(BaseModel):
+    """Response for infrastructure analysis endpoint."""
+    domains: list[str]
+    profiles: list[DomainProfile]
+    matches: list[InfrastructureMatch]
+    total_domains: int
+    total_matches: int
 
 
 class FundingClusterResponse(BaseModel):
     """Funding cluster response."""
 
     cluster_id: str
-    shared_funder: EntityNode
-    members: list[EntityNode]
+    shared_funder: EntityNodeResponse
+    members: list[EntityNodeResponse]
     total_funding: float
     score: float
     confidence: float
@@ -68,8 +308,8 @@ class FundingClusterResponse(BaseModel):
 class SharedFunderResponse(BaseModel):
     """Shared funder response."""
 
-    funder: EntityNode
-    recipients: list[EntityNode]
+    funder: EntityNodeResponse
+    recipients: list[EntityNodeResponse]
     shared_count: int
     total_funding: float
     funding_concentration: float
@@ -80,14 +320,14 @@ class SharedFunderResponse(BaseModel):
 # =========================
 
 
-@router.get("/path")
+@router.get("/path", response_model=FindPathResponse)
 async def find_paths(
     from_id: UUID,
     to_id: UUID,
     max_hops: int = Query(3, ge=1, le=5),
     rel_types: str | None = Query(None, description="Comma-separated relationship types"),
     user: OptionalUser = None,
-) -> dict[str, Any]:
+) -> FindPathResponse:
     """Find shortest path between two entities.
 
     Args:
@@ -140,7 +380,7 @@ async def find_paths(
 # =========================
 
 
-@router.get("/paths/all")
+@router.get("/paths/all", response_model=AllPathsResponse)
 async def find_all_entity_paths(
     from_id: UUID,
     to_id: UUID,
@@ -148,7 +388,7 @@ async def find_all_entity_paths(
     rel_types: str | None = Query(None, description="Comma-separated relationship types"),
     limit: int = Query(10, ge=1, le=50),
     user: OptionalUser = None,
-) -> dict[str, Any]:
+) -> AllPathsResponse:
     """Find all paths between two entities.
 
     Unlike /path which returns only the shortest path, this endpoint
@@ -207,13 +447,13 @@ async def find_all_entity_paths(
 # =========================
 
 
-@router.get("/connecting-entities")
+@router.get("/connecting-entities", response_model=ConnectingEntitiesResponse)
 async def find_entity_connectors(
     entity_ids: str = Query(..., description="Comma-separated entity IDs to find connections between"),
     max_hops: int = Query(3, ge=1, le=5),
     rel_types: str | None = Query(None, description="Comma-separated relationship types"),
     user: OptionalUser = None,
-) -> dict[str, Any]:
+) -> ConnectingEntitiesResponse:
     """Find entities that connect multiple given entities.
 
     Discovers hidden connections like shared directors,
@@ -271,14 +511,14 @@ async def find_entity_connectors(
 # =========================
 
 
-@router.get("/graph-at-time/{entity_id}")
+@router.get("/graph-at-time/{entity_id}", response_model=GraphAtTimeResponse)
 async def get_entity_graph_at_time(
     entity_id: UUID,
     as_of: datetime = Query(..., description="Point in time for the snapshot"),
     depth: int = Query(1, ge=1, le=3),
     rel_types: str | None = Query(None, description="Comma-separated relationship types"),
     user: OptionalUser = None,
-) -> dict[str, Any]:
+) -> GraphAtTimeResponse:
     """Get the state of relationships around an entity at a specific time.
 
     Returns only relationships that were valid at the given point in time,
@@ -331,14 +571,14 @@ async def get_entity_graph_at_time(
     }
 
 
-@router.get("/changes")
+@router.get("/changes", response_model=RelationshipChangesResponse)
 async def get_relationship_changes(
     entity_id: UUID,
     from_date: datetime = Query(..., description="Start of comparison period"),
     to_date: datetime = Query(..., description="End of comparison period"),
     rel_types: str | None = Query(None, description="Comma-separated relationship types"),
     user: OptionalUser = None,
-) -> dict[str, Any]:
+) -> RelationshipChangesResponse:
     """Detect changes in relationships between two time points.
 
     Compares the graph state at from_date with to_date and identifies
@@ -410,13 +650,13 @@ async def get_relationship_changes(
     }
 
 
-@router.get("/timeline")
+@router.get("/timeline", response_model=RelationshipTimelineResponse)
 async def get_entity_relationship_timeline(
     source_id: UUID,
     target_id: UUID,
     rel_type: str | None = Query(None, description="Filter by relationship type"),
     user: OptionalUser = None,
-) -> dict[str, Any]:
+) -> RelationshipTimelineResponse:
     """Get the full timeline of relationships between two entities.
 
     Shows all historical periods when a relationship existed,
@@ -472,14 +712,14 @@ async def get_entity_relationship_timeline(
 # =========================
 
 
-@router.get("/funding-paths/{funder_id}")
+@router.get("/funding-paths/{funder_id}", response_model=FundingPathsResponse)
 async def get_funder_paths(
     funder_id: UUID,
     max_hops: int = Query(3, ge=1, le=5),
     min_amount: float | None = Query(None, description="Minimum funding amount"),
     fiscal_year: int | None = Query(None, description="Filter by fiscal year"),
     user: OptionalUser = None,
-) -> dict[str, Any]:
+) -> FundingPathsResponse:
     """Get all funding paths from a funder.
 
     Returns paths showing how funding flows from a funder
@@ -513,14 +753,14 @@ async def get_funder_paths(
 # =========================
 
 
-@router.get("/funding-recipients/{funder_id}")
+@router.get("/funding-recipients/{funder_id}", response_model=FundingRecipientsResponse)
 async def get_funder_recipients(
     funder_id: UUID,
     fiscal_year: int | None = Query(None, description="Filter by fiscal year"),
     min_amount: float | None = Query(None, description="Minimum funding amount"),
     limit: int = Query(50, ge=1, le=200),
     user: OptionalUser = None,
-) -> dict[str, Any]:
+) -> FundingRecipientsResponse:
     """Get direct funding recipients of an entity.
 
     Returns all entities that have received funding directly
@@ -554,14 +794,14 @@ async def get_funder_recipients(
 # =========================
 
 
-@router.get("/funding-sources/{recipient_id}")
+@router.get("/funding-sources/{recipient_id}", response_model=FundingSourcesResponse)
 async def get_recipient_funders(
     recipient_id: UUID,
     fiscal_year: int | None = Query(None, description="Filter by fiscal year"),
     min_amount: float | None = Query(None, description="Minimum funding amount"),
     limit: int = Query(50, ge=1, le=200),
     user: OptionalUser = None,
-) -> dict[str, Any]:
+) -> FundingSourcesResponse:
     """Get funding sources of an entity.
 
     Returns all entities that have provided funding directly
@@ -595,7 +835,7 @@ async def get_recipient_funders(
 # =========================
 
 
-@router.get("/funding-clusters")
+@router.get("/funding-clusters", response_model=FundingClustersResponse)
 async def get_funding_clusters(
     min_shared_funders: int = Query(2, ge=1, le=10),
     min_cluster_size: int = Query(2, ge=2, le=20),
@@ -603,7 +843,7 @@ async def get_funding_clusters(
     fiscal_year: int | None = Query(None, description="Filter by fiscal year"),
     limit: int = Query(20, ge=1, le=50),
     user: OptionalUser = None,
-) -> dict[str, Any]:
+) -> FundingClustersResponse:
     """Get funding clusters (entities sharing common funders).
 
     Identifies groups of entities that receive funding from
@@ -655,14 +895,14 @@ async def get_funding_clusters(
 # =========================
 
 
-@router.get("/shared-funders")
+@router.get("/shared-funders", response_model=SharedFundersResponse)
 async def get_shared_funders_endpoint(
     entity_ids: str | None = Query(None, description="Comma-separated entity IDs"),
     min_recipients: int = Query(2, ge=2, le=20),
     fiscal_year: int | None = Query(None, description="Filter by fiscal year"),
     limit: int = Query(20, ge=1, le=50),
     user: OptionalUser = None,
-) -> dict[str, Any]:
+) -> SharedFundersResponse:
     """Find funders shared by multiple entities.
 
     Identifies funders that provide funding to multiple
@@ -729,13 +969,13 @@ class SharedInfraResponse(BaseModel):
     sharing_category: str | None = None
 
 
-@router.get("/shared-infrastructure")
+@router.get("/shared-infrastructure", response_model=SharedInfrastructureResponse)
 async def get_shared_infrastructure(
     outlet_ids: str | None = Query(None, description="Comma-separated outlet IDs"),
     domains: str | None = Query(None, description="Comma-separated domains to analyze"),
     min_score: float = Query(1.0, ge=0.0, le=10.0, description="Minimum score threshold"),
     user: OptionalUser = None,
-) -> dict[str, Any]:
+) -> SharedInfrastructureResponse:
     """Get shared infrastructure relationships between outlets.
 
     Identifies outlets that share technical infrastructure
@@ -818,11 +1058,11 @@ async def get_shared_infrastructure(
     }
 
 
-@router.post("/shared-infrastructure/analyze")
+@router.post("/shared-infrastructure/analyze", response_model=InfrastructureAnalysisResponse)
 async def analyze_domain_infrastructure(
     domain: str = Query(..., description="Domain to analyze"),
     user: OptionalUser = None,
-) -> dict[str, Any]:
+) -> InfrastructureAnalysisResponse:
     """Analyze infrastructure for a single domain.
 
     Performs full infrastructure detection including:

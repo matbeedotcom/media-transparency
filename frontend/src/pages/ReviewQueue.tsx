@@ -14,7 +14,7 @@ import {
   rejectMatch,
   deferMatch,
   type EntityMatchResponse,
-} from '../services/api';
+} from '@/api';
 import { MatchReview } from '../components/cases/MatchReview';
 
 export default function ReviewQueue() {
@@ -36,7 +36,8 @@ export default function ReviewQueue() {
   });
 
   const approveMutation = useMutation({
-    mutationFn: (matchId: string) => approveMatch(matchId, reviewNotes),
+    mutationFn: ({ matchId, notes }: { matchId: string; notes: string }) => 
+      approveMatch(matchId, { notes }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['case-matches', id] });
       queryClient.invalidateQueries({ queryKey: ['case', id] });
@@ -46,7 +47,8 @@ export default function ReviewQueue() {
   });
 
   const rejectMutation = useMutation({
-    mutationFn: (matchId: string) => rejectMatch(matchId, reviewNotes),
+    mutationFn: ({ matchId, notes }: { matchId: string; notes: string }) => 
+      rejectMatch(matchId, { notes }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['case-matches', id] });
       queryClient.invalidateQueries({ queryKey: ['case', id] });
@@ -56,7 +58,8 @@ export default function ReviewQueue() {
   });
 
   const deferMutation = useMutation({
-    mutationFn: (matchId: string) => deferMatch(matchId, reviewNotes),
+    mutationFn: ({ matchId, notes }: { matchId: string; notes: string }) => 
+      deferMatch(matchId, { notes }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['case-matches', id] });
       setSelectedMatch(null);
@@ -65,20 +68,20 @@ export default function ReviewQueue() {
   });
 
   const handleApprove = () => {
-    if (selectedMatch) {
-      approveMutation.mutate(selectedMatch.id);
+    if (selectedMatch?.id) {
+      approveMutation.mutate({ matchId: selectedMatch.id, notes: reviewNotes });
     }
   };
 
   const handleReject = () => {
-    if (selectedMatch) {
-      rejectMutation.mutate(selectedMatch.id);
+    if (selectedMatch?.id) {
+      rejectMutation.mutate({ matchId: selectedMatch.id, notes: reviewNotes });
     }
   };
 
   const handleDefer = () => {
-    if (selectedMatch) {
-      deferMutation.mutate(selectedMatch.id);
+    if (selectedMatch?.id) {
+      deferMutation.mutate({ matchId: selectedMatch.id, notes: reviewNotes });
     }
   };
 
@@ -103,7 +106,7 @@ export default function ReviewQueue() {
           <div className="spinner" />
           <span>Loading matches...</span>
         </div>
-      ) : matchesData?.items.length === 0 ? (
+      ) : matchesData?.items && matchesData.items.length === 0 ? (
         <div className="empty-state">
           <h2>No Pending Matches</h2>
           <p>All entity matches have been reviewed.</p>
@@ -115,21 +118,21 @@ export default function ReviewQueue() {
         <div className="review-layout">
           {/* Match List */}
           <div className="card match-list">
-            <h2>Pending Matches ({matchesData?.pending_count})</h2>
+            <h2>Pending Matches ({matchesData?.pending_count ?? 0})</h2>
             <div className="matches">
-              {matchesData?.items.map((match) => (
+              {matchesData?.items?.map((match) => (
                 <button
-                  key={match.id}
+                  key={match.id ?? 'unknown'}
                   className={`match-item ${selectedMatch?.id === match.id ? 'selected' : ''}`}
                   onClick={() => setSelectedMatch(match)}
                 >
                   <div className="match-summary">
-                    <span className="source">{match.source_entity.name}</span>
+                    <span className="source">{match.source_entity?.name ?? 'Unknown'}</span>
                     <span className="arrow">→</span>
-                    <span className="target">{match.target_entity.name}</span>
+                    <span className="target">{match.target_entity?.name ?? 'Unknown'}</span>
                   </div>
                   <div className="match-confidence">
-                    {(match.confidence * 100).toFixed(0)}% confidence
+                    {((match.confidence ?? 0) * 100).toFixed(0)}% confidence
                   </div>
                 </button>
               ))}

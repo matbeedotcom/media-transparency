@@ -12,7 +12,7 @@ import {
   getGoldenDatasets,
   runValidation as apiRunValidation,
   getJobStatus,
-} from '../services/api';
+} from '@/api';
 
 // =========================
 // Types
@@ -114,7 +114,17 @@ async function fetchDashboard(): Promise<DashboardData> {
 }
 
 async function fetchDatasets(): Promise<GoldenDataset[]> {
-  return getGoldenDatasets() as unknown as Promise<GoldenDataset[]>;
+  const result = await getGoldenDatasets();
+  // Map the response to our expected format with type coercion
+  return (result ?? []).map((ds) => ({
+    id: String(ds.id ?? ''),
+    name: String(ds.name ?? ''),
+    version: String(ds.version ?? ''),
+    description: String(ds.description ?? ''),
+    case_count: Number(ds.case_count ?? 0),
+    positive_cases: Number(ds.positive_cases ?? 0),
+    negative_cases: Number(ds.negative_cases ?? 0),
+  }));
 }
 
 async function runValidation(params: {
@@ -128,9 +138,9 @@ async function runValidation(params: {
     include_synthetic: params.include_synthetic,
   });
   return {
-    job_id: result.job_id,
-    status: result.status,
-    status_url: result.status_url || '',
+    job_id: result.job_id ?? '',
+    status: result.status ?? 'pending',
+    status_url: result.status_url ?? '',
     estimated_cases: 0,
   };
 }
@@ -138,7 +148,7 @@ async function runValidation(params: {
 async function fetchJobStatus(jobId: string): Promise<{ status: string; results?: Record<string, number> }> {
   const result = await getJobStatus(jobId);
   const fullResult = result as unknown as Record<string, unknown>;
-  return { status: result.status, results: fullResult.results as Record<string, number> | undefined };
+  return { status: result.status ?? 'unknown', results: fullResult.results as Record<string, number> | undefined };
 }
 
 // =========================

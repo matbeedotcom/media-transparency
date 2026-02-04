@@ -2,6 +2,20 @@
  * API client service for MITDS
  *
  * Provides typed API calls using axios and TanStack Query integration.
+ * 
+ * @deprecated MIGRATION IN PROGRESS
+ * 
+ * This file is being migrated to auto-generated Orval hooks.
+ * For new code, prefer importing from '@/api' which provides:
+ * - Generated React Query hooks (e.g., useSearchEntities, useGetEntity)
+ * - Generated TypeScript types (e.g., EntityResponse, RelationshipResponse)
+ * - Raw API functions for direct calls
+ * 
+ * Existing code still uses this file. Full migration requires aligning
+ * the OpenAPI spec types with the existing manual types.
+ * 
+ * @see frontend/src/api/ - Generated Orval hooks and types
+ * @see backend/openapi/openapi.yaml - OpenAPI specification
  */
 
 import axios, { AxiosError, AxiosInstance } from 'axios';
