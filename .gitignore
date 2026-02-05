@@ -162,3 +162,9 @@ data/processed/
 
 # Search cache
 .cache/
+
+# =========================
+# Generated API Code (Orval)
+# =========================
+# Regenerated on build from OpenAPI spec
+frontend/src/api/generated/
