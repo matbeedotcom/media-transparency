@@ -386,10 +386,25 @@ async def get_ingestion_status(
                     "records_updated": 0,
                 })
 
-        return {
-            "sources": sources_status,
-            "timestamp": datetime.utcnow().isoformat(),
-        }
+        # Compute summary statistics
+        total_records = sum(s.get("records_processed", 0) + s.get("records_created", 0) for s in sources_status)
+        healthy_sources = sum(1 for s in sources_status if s.get("status") == "healthy")
+        total_sources = len(sources_status)
+
+        return IngestionStatusResponse(
+            sources=[SourceStatusItem(
+                source=s["source"],
+                status=s["status"],
+                last_run_id=s.get("last_run_id"),
+                last_run_at=s.get("last_successful_run"),
+                records_total=s.get("records_created", 0),
+                last_records_processed=s.get("records_processed", 0),
+            ) for s in sources_status],
+            total_records=total_records,
+            healthy_sources=healthy_sources,
+            total_sources=total_sources,
+            total=total_sources,
+        )
 
 
 # =========================

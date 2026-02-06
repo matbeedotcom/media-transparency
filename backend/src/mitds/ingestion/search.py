@@ -625,6 +625,352 @@ async def search_canada_corps(query: str, limit: int = 10) -> list[CompanySearch
 
 
 # =========================
+# Meta Ads Search
+# =========================
+
+
+def _score_meta_page_name(page_name: str, query: str) -> int:
+    """Score how well a Meta page name matches the search query.
+
+    The Meta Ad Library API's search_terms parameter searches ad *content*,
+    not advertiser names. This function scores returned page names against
+    the original query so we can rank/filter results by advertiser relevance.
+
+    Returns:
+        Score 0-100 (0 means no match, higher is better).
+        Returns 0 for pages that don't match at all — these are filtered out.
+    """
+    if not page_name or not query:
+        return 0
+
+    name_lower = page_name.lower()
+    query_lower = query.lower()
+    query_parts = query_lower.split()
+
+    # Exact match (case-insensitive)
+    if name_lower == query_lower:
+        return 100
+    # Page name starts with the full query
+    if name_lower.startswith(query_lower):
+        return 95
+    # Full query found as substring in page name
+    if query_lower in name_lower:
+        return 85
+    # All query words appear in page name (in any order)
+    if all(part in name_lower for part in query_parts):
+        return 75
+    # Concatenated query matches page name (e.g. "Canada Proud" -> "canadaproud")
+    query_concat = query_lower.replace(" ", "")
+    name_concat = name_lower.replace(" ", "")
+    if query_concat in name_concat or name_concat in query_concat:
+        return 70
+    # Most query words appear (at least 2/3 of words)
+    matching_parts = sum(1 for part in query_parts if part in name_lower)
+    if len(query_parts) >= 2 and matching_parts >= max(2, len(query_parts) * 2 // 3):
+        return 60
+    # Page name starts with any query word longer than 3 chars
+    # (catches "CanadaProud" when searching "Canada Proud")
+    for part in query_parts:
+        if len(part) > 3 and name_lower.startswith(part):
+            return 50
+
+    # No meaningful match — filter this page out
+    return 0
+
+
+async def _search_meta_pages(
+    query: str,
+    access_token: str,
+    limit: int,
+) -> list[CompanySearchResult]:
+    """Search Facebook Pages by name using the Graph API.
+
+    This is what the Facebook Ad Library website does internally —
+    a page-name typeahead search — which returns pages matching the
+    query by name. Much more accurate than searching ad content text.
+
+    Uses GET /v24.0/pages/search?q=... which requires a user access
+    token (from OAuth). Returns empty list if the endpoint is unavailable
+    (e.g., missing permissions), allowing the caller to fall back.
+
+    Args:
+        query: Page name to search for
+        access_token: Meta API access token
+        limit: Maximum results to return
+
+    Returns:
+        List of CompanySearchResult, or empty list if endpoint unavailable
+    """
+    from .meta_ads import META_GRAPH_API_BASE
+
+    page_search_url = f"{META_GRAPH_API_BASE}/pages/search"
+    params = {
+        "q": query,
+        "fields": "id,name,category,fan_count,verification_status,link",
+        "access_token": access_token,
+        "limit": min(limit, 25),
+    }
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(10.0, read=20.0),
+            follow_redirects=True,
+        ) as client:
+            response = await client.get(page_search_url, params=params)
+
+            if response.status_code != 200:
+                # The /pages/search endpoint requires the "Page Public Content
+                # Access" feature (or "Page Public Metadata Access") to be
+                # approved via Meta App Review.  The pages_read_engagement
+                # *permission* only covers pages the user manages — it does
+                # NOT unlock public page search.
+                #
+                # To enable this:
+                #   1. Go to https://developers.facebook.com/apps/<APP_ID>/review/
+                #   2. Request the "Page Public Content Access" feature
+                #   3. Complete Meta's App Review process
+                #
+                # Until then, the caller falls back to ads_archive search.
+                try:
+                    error_data = response.json() if response.content else {}
+                    error_info = error_data.get("error", {})
+                    error_code = error_info.get("code")
+                    error_msg = error_info.get("message", "unknown error")
+                    if error_code == 10:
+                        # Permission / feature error — expected until App Review
+                        logger.info(
+                            "Meta page search requires 'Page Public Content Access' "
+                            "feature via App Review. Falling back to ads_archive search. "
+                            "Apply at: https://developers.facebook.com/docs/apps/review/feature#reference-PAGES_ACCESS"
+                        )
+                    else:
+                        logger.debug(
+                            f"Meta page search unavailable ({response.status_code}): "
+                            f"{error_msg}"
+                        )
+                except Exception:
+                    logger.debug(
+                        f"Meta page search unavailable ({response.status_code})"
+                    )
+                return []
+
+            data = response.json()
+            pages = data.get("data", [])
+
+    except Exception as e:
+        logger.debug(f"Meta page search request failed: {e}")
+        return []
+
+    if not pages:
+        return []
+
+    results: list[CompanySearchResult] = []
+    for page in pages:
+        page_id = str(page.get("id", ""))
+        name = page.get("name", "")
+        if not page_id or not name:
+            continue
+
+        results.append(CompanySearchResult(
+            source="meta_ads",
+            identifier=page_id,
+            identifier_type="meta_page_id",
+            name=name,
+            details={
+                "page_id": page_id,
+                "category": page.get("category"),
+                "fan_count": page.get("fan_count"),
+                "verification_status": page.get("verification_status"),
+                "link": page.get("link"),
+            },
+        ))
+
+    logger.info(
+        f"Meta page search returned {len(results)} results for '{query}'"
+    )
+    return results[:limit]
+
+
+async def _search_meta_ads_archive(
+    query: str,
+    access_token: str,
+    limit: int,
+) -> list[CompanySearchResult]:
+    """Fallback: search via the ads_archive API and score by page name.
+
+    The ads_archive API's search_terms parameter searches ad creative text
+    **and** funding entity disclaimers. We fetch a large batch, deduplicate
+    by page_id, and then score each page by how well its name matches the
+    original query. Pages with no name relevance are filtered out.
+
+    Args:
+        query: Search query (sponsor/page name)
+        access_token: Meta API access token
+        limit: Maximum results to return
+
+    Returns:
+        List of CompanySearchResult scored and filtered by page-name relevance
+    """
+    from .meta_ads import META_ADS_ARCHIVE_ENDPOINT
+
+    # Request page_id, page_name, and bylines (funding entity / "Paid for by").
+    # We use a custom minimal set rather than MINIMAL_AD_FIELDS to include
+    # bylines for better sponsor matching.
+    search_fields = ["id", "page_id", "page_name", "bylines"]
+
+    # Fetch a large batch — search_terms matches ad content text, so many
+    # results will be from irrelevant pages. We need enough volume to
+    # catch the actual matching sponsors after dedup + scoring.
+    fetch_limit = max(limit * 10, 100)
+    params = {
+        "access_token": access_token,
+        "ad_reached_countries": json.dumps(["CA", "US"]),
+        "ad_type": "POLITICAL_AND_ISSUE_ADS",
+        "ad_active_status": "ALL",
+        "fields": ",".join(search_fields),
+        "search_terms": query,
+        "limit": fetch_limit,
+    }
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(15.0, read=30.0),
+            follow_redirects=True,
+        ) as client:
+            response = await client.get(META_ADS_ARCHIVE_ENDPOINT, params=params)
+
+            if response.status_code != 200:
+                try:
+                    error_data = response.json() if response.content else {}
+                    error_info = error_data.get("error", {})
+                    logger.warning(
+                        f"Meta Ads archive search error {response.status_code}: "
+                        f"code={error_info.get('code')}, "
+                        f"message={error_info.get('message', 'No message')}"
+                    )
+                except Exception:
+                    logger.warning(
+                        f"Meta Ads archive search error {response.status_code}: "
+                        f"{response.text[:300] if response.text else 'No response body'}"
+                    )
+                return []
+
+            data = response.json()
+            ads = data.get("data", [])
+
+    except Exception as e:
+        logger.warning(f"Meta Ads archive search request failed: {e}")
+        return []
+
+    if not ads:
+        return []
+
+    # Deduplicate by page_id — multiple ads from the same sponsor.
+    # Also capture bylines (funding entity / "Paid for by") for scoring.
+    seen_page_ids: dict[str, dict[str, Any]] = {}
+    for ad in ads:
+        page_id = str(ad.get("page_id", ""))
+        page_name = ad.get("page_name", "")
+        if not page_id:
+            continue
+        if page_id not in seen_page_ids:
+            seen_page_ids[page_id] = {
+                "page_id": page_id,
+                "page_name": page_name,
+                "ad_id": str(ad.get("id", "")),
+                "bylines": set(),
+            }
+        # Collect bylines across all ads from this page
+        bylines_str = ad.get("bylines", "")
+        if bylines_str:
+            seen_page_ids[page_id]["bylines"].add(bylines_str)
+
+    # Score each unique page by how well its name (or funding entity)
+    # matches the query, then filter out irrelevant pages (score == 0).
+    scored: list[tuple[int, CompanySearchResult]] = []
+    for page_info in seen_page_ids.values():
+        name = page_info["page_name"]
+        # Score against page name first
+        score = _score_meta_page_name(name, query)
+        # Also try scoring against bylines (funding entity names)
+        # — use whichever gives the higher score
+        for byline in page_info["bylines"]:
+            byline_score = _score_meta_page_name(byline, query)
+            if byline_score > score:
+                score = byline_score
+        if score == 0:
+            continue
+
+        bylines_list = sorted(page_info["bylines"]) if page_info["bylines"] else None
+        scored.append((score, CompanySearchResult(
+            source="meta_ads",
+            identifier=page_info["page_id"],
+            identifier_type="meta_page_id",
+            name=name,
+            details={
+                "page_id": page_info["page_id"],
+                "sample_ad_id": page_info["ad_id"],
+                "funding_entity": bylines_list[0] if bylines_list else None,
+            },
+        )))
+
+    # Sort by score descending, then alphabetically by name
+    scored.sort(key=lambda x: (-x[0], x[1].name))
+    return [r for _, r in scored[:limit]]
+
+
+async def search_meta_ads(query: str, limit: int = 10) -> list[CompanySearchResult]:
+    """Search for Facebook Pages / Meta Ad sponsors by name.
+
+    Uses a two-strategy approach matching how the Facebook Ad Library
+    website itself works:
+
+    1. **Primary — Page Search API**: Searches Facebook Pages by name via
+       GET /pages/search. This is the equivalent of the website's GraphQL
+       typeahead (useAdLibraryTypeaheadSuggestionDataSourceQuery). Returns
+       pages whose *names* match the query. Requires a user access token
+       with page search capabilities.
+
+    2. **Fallback — ads_archive with scoring**: If the page search endpoint
+       is unavailable (e.g., token lacks permissions), falls back to the
+       ads_archive API's search_terms (which searches ad *content* text),
+       deduplicates by page, and scores/filters by page-name relevance.
+
+    Gracefully returns empty list if no Meta token is configured.
+
+    Args:
+        query: Search query (sponsor/page name)
+        limit: Maximum results to return
+
+    Returns:
+        List of CompanySearchResult with source="meta_ads", sorted by relevance
+    """
+    # Obtain access token — gracefully skip if not configured
+    try:
+        from .meta_ads import MetaAdIngester
+
+        ingester = MetaAdIngester()
+        try:
+            access_token = await ingester.get_access_token()
+        finally:
+            await ingester.close()
+    except (ValueError, Exception) as e:
+        logger.debug(f"Meta Ads search skipped (no token): {e}")
+        return []
+
+    # Strategy 1: Try Facebook Page Search API (searches by page name)
+    results = await _search_meta_pages(query, access_token, limit)
+    if results:
+        return results
+
+    # Strategy 2: Fall back to ads_archive search (searches ad content text)
+    logger.debug(
+        "Page search unavailable, falling back to ads_archive search"
+    )
+    return await _search_meta_ads_archive(query, access_token, limit)
+
+
+# =========================
 # Cache Management
 # =========================
 
@@ -683,13 +1029,14 @@ async def search_all_sources(
     Returns:
         Aggregated search results from all sources
     """
-    active_sources = sources or ["sec_edgar", "irs990", "cra", "canada_corps"]
+    active_sources = sources or ["sec_edgar", "irs990", "cra", "canada_corps", "meta_ads"]
 
     search_fns = {
         "sec_edgar": search_sec_edgar,
         "irs990": search_irs990,
         "cra": search_cra,
         "canada_corps": search_canada_corps,
+        "meta_ads": search_meta_ads,
     }
 
     tasks = {}
