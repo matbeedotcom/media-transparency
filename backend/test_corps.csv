@@ -1,0 +1,5 @@
+name,registration_number,business_number,corp_type,status,incorporation_date,street,city,province,postal_code
+Postmedia Network Inc.,SK20150001234,123456789RC0001,for_profit,active,2015-03-15,365 Bloor Street East,Toronto,ON,M4W 3L4
+Corus Entertainment Inc.,SK20120005678,987654321RC0001,for_profit,active,2012-06-20,25 Dockside Drive,Toronto,ON,M5A 0B5
+SaskTel,SK19080000001,,crown_corporation,active,1908-04-01,2121 Saskatchewan Drive,Regina,SK,S4P 3Y2
+Saskatchewan Non-Profit Housing Association,SK19850001111,,nonprofit,active,1985-01-10,2222 13th Avenue,Regina,SK,S4P 0V1

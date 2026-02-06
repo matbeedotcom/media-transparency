@@ -1544,6 +1544,11 @@ def ingest_lobbying(
     help="Search external sources (Canada Corps, SEC, CRA) for vendor matches",
 )
 @click.option(
+    "--contributors",
+    is_flag=True,
+    help="Show extracted contributors after ingestion (requires --parse-pdfs)",
+)
+@click.option(
     "--verbose",
     "-v",
     is_flag=True,
@@ -1556,6 +1561,7 @@ def ingest_elections_canada(
     elections: str | None,
     parse_pdfs: bool,
     enrich_vendors: bool,
+    contributors: bool,
     verbose: bool,
 ):
     """Ingest Elections Canada third party data.
@@ -1635,12 +1641,77 @@ def ingest_elections_canada(
 
         _print_result(result, duration, verbose)
 
+        # Show extracted contributors if --contributors flag is set
+        if contributors:
+            _show_contributors(election_ids, target_entities)
+
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         if verbose:
             import traceback
             traceback.print_exc()
         sys.exit(1)
+
+
+def _show_contributors(
+    election_ids: list[str] | None = None,
+    target_entities: list[str] | None = None,
+) -> None:
+    """Show extracted contributors from the database after ingestion."""
+    from ..db import get_neo4j_session
+
+    async def _query():
+        try:
+            async with get_neo4j_session() as session:
+                query = """
+                    MATCH (c)-[r:CONTRIBUTED_TO]->(tp:Organization)
+                    WHERE tp.is_election_third_party = true
+                """
+                params = {}
+                if election_ids:
+                    query += " AND r.election_id IN $election_ids"
+                    params["election_ids"] = election_ids
+                if target_entities:
+                    query += " AND tp.name IN $target_entities"
+                    params["target_entities"] = target_entities
+
+                query += """
+                    RETURN tp.name AS third_party, c.name AS contributor,
+                           r.amount AS amount, r.contributor_class AS class,
+                           r.election_id AS election, r.jurisdiction AS jurisdiction,
+                           labels(c) AS labels
+                    ORDER BY tp.name, r.amount DESC
+                """
+                result = await session.run(query, **params)
+                records = await result.data()
+
+                if not records:
+                    click.echo("\n  No contributors found.")
+                    return
+
+                click.echo(f"\n{'=' * 70}")
+                click.echo(f"  Extracted Contributors ({len(records)} total)")
+                click.echo(f"{'=' * 70}")
+
+                current_tp = None
+                for r in records:
+                    if r["third_party"] != current_tp:
+                        current_tp = r["third_party"]
+                        click.echo(f"\n  {current_tp}:")
+
+                    labels = r.get("labels", [])
+                    entity_type = "Org" if "Organization" in labels else "Person"
+                    cls = r.get("class", "unknown")
+                    amount = r.get("amount", 0)
+                    click.echo(
+                        f"    ${amount:,.2f}  {r['contributor']} "
+                        f"({cls}, {entity_type})"
+                    )
+
+        except Exception as e:
+            click.echo(f"\n  Error querying contributors: {e}")
+
+    asyncio.run(_query())
 
 
 @cli.command(name="meta-ads")
@@ -2603,6 +2674,224 @@ def _print_result(result: dict[str, Any], duration: float, verbose: bool):
                     click.echo(f"  {i}. {error}")
             if len(errors) > 10:
                 click.echo(f"  ... and {len(errors) - 10} more")
+
+
+# =============================================================================
+# Political Ad Funding CLI Commands (007)
+# =============================================================================
+
+
+@cli.command(name="beneficial-ownership")
+@click.option(
+    "--corporation-number",
+    type=str,
+    default=None,
+    help="Specific corporation number to look up",
+)
+@click.option(
+    "--from-graph",
+    is_flag=True,
+    help="Pull corporation numbers from Neo4j graph",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum records to process",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Enable verbose output",
+)
+def ingest_beneficial_ownership(
+    corporation_number: str | None,
+    from_graph: bool,
+    limit: int | None,
+    verbose: bool,
+):
+    """Ingest beneficial ownership (ISC) data from ISED web search.
+
+    Queries the federal beneficial ownership registry for Individuals
+    with Significant Control (ISC) data by corporation number.
+
+    Examples:
+        mitds ingest beneficial-ownership --corporation-number 1234567
+        mitds ingest beneficial-ownership --from-graph --limit 100
+    """
+    from ..ingestion.beneficial_ownership import run_beneficial_ownership_ingestion
+
+    corp_numbers = [corporation_number] if corporation_number else []
+
+    click.echo("Starting beneficial ownership ingestion...")
+    if verbose:
+        if corp_numbers:
+            click.echo(f"  Corporation numbers: {corp_numbers}")
+        if from_graph:
+            click.echo("  Sourcing corporation numbers from Neo4j graph")
+        if limit:
+            click.echo(f"  Limit: {limit}")
+
+    start_time = datetime.now()
+
+    try:
+        result = asyncio.run(
+            run_beneficial_ownership_ingestion(
+                corporation_numbers=corp_numbers if corp_numbers else None,
+                from_graph=from_graph,
+                limit=limit,
+                verbose=verbose,
+            )
+        )
+        duration = (datetime.now() - start_time).total_seconds()
+        click.echo(f"Completed in {duration:.1f}s")
+        if hasattr(result, "model_dump"):
+            _print_result(result.model_dump(), duration, verbose)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        if verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
+@cli.command(name="google-ads")
+@click.option(
+    "--country",
+    type=str,
+    default="CA",
+    help="Country code (default: CA)",
+)
+@click.option(
+    "--advertiser",
+    type=str,
+    default=None,
+    help="Filter by advertiser name",
+)
+@click.option(
+    "--date-from",
+    type=str,
+    default=None,
+    help="Start date filter (YYYY-MM-DD)",
+)
+@click.option(
+    "--date-to",
+    type=str,
+    default=None,
+    help="End date filter (YYYY-MM-DD)",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=100,
+    help="Maximum ads to process (default: 100)",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Enable verbose output",
+)
+def ingest_google_ads(
+    country: str,
+    advertiser: str | None,
+    date_from: str | None,
+    date_to: str | None,
+    limit: int,
+    verbose: bool,
+):
+    """Ingest Google Political Ads from BigQuery.
+
+    Queries the public BigQuery dataset for Canadian political ads.
+    Requires Google Cloud credentials (GOOGLE_APPLICATION_CREDENTIALS).
+
+    Examples:
+        mitds ingest google-ads --country CA
+        mitds ingest google-ads --country CA --advertiser "Example PR Inc"
+        mitds ingest google-ads --country CA --date-from 2025-01-01 --limit 500
+    """
+    from ..ingestion.google_ads import run_google_ads_ingestion
+
+    click.echo(f"Starting Google Political Ads ingestion for {country}...")
+    if verbose:
+        click.echo(f"  Country: {country}")
+        if advertiser:
+            click.echo(f"  Advertiser filter: {advertiser}")
+        if date_from:
+            click.echo(f"  Date from: {date_from}")
+        if date_to:
+            click.echo(f"  Date to: {date_to}")
+        click.echo(f"  Limit: {limit}")
+
+    start_time = datetime.now()
+
+    try:
+        result = asyncio.run(
+            run_google_ads_ingestion(
+                country=country,
+                advertiser_name=advertiser,
+                date_from=date_from,
+                date_to=date_to,
+                limit=limit,
+                verbose=verbose,
+            )
+        )
+        duration = (datetime.now() - start_time).total_seconds()
+        click.echo(f"Completed in {duration:.1f}s")
+        if hasattr(result, "model_dump"):
+            _print_result(result.model_dump(), duration, verbose)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        if verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
+@cli.command(name="provincial-lobbying")
+@click.option(
+    "--province",
+    type=click.Choice(["BC", "ON", "AB"]),
+    required=True,
+    help="Province to ingest",
+)
+@click.option(
+    "--incremental/--full",
+    default=True,
+    help="Incremental or full sync",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum records to process",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Enable verbose output",
+)
+def ingest_provincial_lobbying(
+    province: str,
+    incremental: bool,
+    limit: int | None,
+    verbose: bool,
+):
+    """Ingest provincial lobbyist registry data.
+
+    Currently supports BC (CSV download from lobbyistsregistrar.bc.ca).
+
+    Examples:
+        mitds ingest provincial-lobbying --province BC
+        mitds ingest provincial-lobbying --province BC --limit 100 --verbose
+    """
+    click.echo(f"Starting provincial lobbying ingestion for {province}...")
+    click.echo("  Note: BC lobbying ingester will be implemented in Phase 5 (T037-T043)")
+
+    # Placeholder — will be implemented when BC lobbying ingester is built
+    click.echo(f"  Province {province} ingestion not yet implemented.")
 
 
 # Main CLI entry point

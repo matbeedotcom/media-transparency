@@ -109,7 +109,7 @@ export interface JobStatus {
 // API Client
 // =========================
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || '/api/v1';
+const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 
 const apiClient: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,

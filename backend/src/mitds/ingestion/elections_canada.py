@@ -229,16 +229,31 @@ class ExpenseLineItem(BaseModel):
     place: str | None = None
 
 
-class Contributor(BaseModel):
-    """A contributor to a third party."""
+class ThirdPartyContributor(BaseModel):
+    """A contributor to a third-party advertiser (FR-023 compliant model).
 
-    name: str
+    Represents a single contribution from an individual, corporation,
+    trade union, or unincorporated association to a registered third-party
+    advertiser, as disclosed in Elections Canada EC20228 financial returns.
+    """
+
+    name: str = Field(..., description="Contributor's legal name")
+    contributor_class: str = Field(
+        default="individual",
+        description="individual, corporation, trade_union, unincorporated_association",
+    )
+    amount: Decimal = Decimal("0")
+    address: str | None = Field(default=None, description="Full mailing address")
     city: str | None = None
     province: str | None = None
     postal_code: str | None = None
+    election_id: str | None = Field(default=None, description="Election identifier (e.g., '44')")
+    jurisdiction: str = Field(default="federal", description="Jurisdiction of the election")
     date_received: date | None = None
-    amount: Decimal = Decimal("0")
-    contributor_type: str = "individual"  # individual, business, corporation, union, etc.
+
+
+# Backward-compatible alias
+Contributor = ThirdPartyContributor
 
 
 class ElectionThirdParty(BaseModel):
@@ -397,8 +412,19 @@ class ElectionsCanadaIngester(BaseIngester[ElectionThirdParty]):
                     if best_pdf:
                         self.logger.info(f"  Using {report_type} report: {best_pdf.split('/')[-1]}")
                         expenses, contributors = await self._parse_pdf_expenses(best_pdf)
+
+                        # Enrich contributors with election metadata
+                        for c in contributors:
+                            c.election_id = tp.election_id
+                            c.jurisdiction = "federal"
+
                         tp.expense_items.extend(expenses)
                         tp.contributors.extend(contributors)
+
+                        # Store raw PDF in S3/MinIO for audit trail (T019)
+                        await self._store_pdf_in_s3(
+                            best_pdf, tp.election_id, tp.third_party_name
+                        )
                     else:
                         self.logger.warning(f"  No recognized PDF reports found")
 
@@ -632,6 +658,34 @@ class ElectionsCanadaIngester(BaseIngester[ElectionThirdParty]):
             self.logger.warning(f"Failed to parse PDF {pdf_url}: {e}")
 
         return expenses, contributors
+
+    async def _store_pdf_in_s3(
+        self, pdf_url: str, election_id: str, tp_name: str
+    ) -> None:
+        """Store raw PDF return in S3/MinIO for audit trail.
+
+        Key format: elections/third-party/{election_id}/{tp_name}/return.pdf
+        """
+        try:
+            storage = get_storage()
+
+            # Download PDF if not already cached
+            response = await self.http_client.get(pdf_url)
+            if response.status_code != 200:
+                return
+
+            # Sanitize tp_name for S3 key
+            safe_name = re.sub(r'[^\w\-.]', '_', tp_name)[:100]
+            key = f"elections/third-party/{election_id}/{safe_name}/return.pdf"
+
+            await storage.upload_bytes(
+                key=key,
+                data=response.content,
+                content_type="application/pdf",
+            )
+            self.logger.info(f"  S3: stored PDF at {key}")
+        except Exception as e:
+            self.logger.warning(f"  S3: failed to store PDF for {tp_name}: {e}")
 
     async def process_record(self, record: ElectionThirdParty) -> dict[str, Any]:
         """Process a third party registration record."""
@@ -1075,48 +1129,85 @@ class ElectionsCanadaIngester(BaseIngester[ElectionThirdParty]):
                             f"  Neo4j: {supplier} -[PAID_BY ${total_amount}]-> {record.third_party_name}"
                         )
 
-                # Create Person nodes for contributors and CONTRIBUTED_TO relationships
+                # Create nodes for contributors and CONTRIBUTED_TO relationships
+                # Uses ThirdPartyContributor model with contributor_class support
                 if record.contributors:
                     self.logger.info(f"  Processing {len(record.contributors)} contributors")
                     for contributor in record.contributors[:50]:  # Limit to top 50
                         if contributor.amount < 200:  # Only contributors over $200
                             continue
 
-                        # Create Person node
-                        await session.run(
-                            """
-                            MERGE (p:Person {name: $name})
-                            ON CREATE SET p.id = $id,
-                                          p.entity_type = 'PERSON',
-                                          p.city = $city,
-                                          p.postal_code = $postal_code,
-                                          p.created_at = $now
-                            ON MATCH SET p.updated_at = $now
-                            """,
-                            name=contributor.name,
-                            id=str(uuid4()),
-                            city=contributor.city,
-                            postal_code=contributor.postal_code,
-                            now=now,
+                        # Determine node type based on contributor_class
+                        contributor_class = getattr(
+                            contributor, "contributor_class", "individual"
+                        )
+                        is_corporate = contributor_class in (
+                            "corporation",
+                            "business",
+                            "trade_union",
+                            "unincorporated_association",
                         )
 
-                        # Create CONTRIBUTED_TO relationship
-                        # Use election_id in the match to allow different amounts per election
-                        # Replace (not accumulate) amounts to support interim -> final updates
+                        if is_corporate:
+                            # Corporate/org contributors → Organization node
+                            await session.run(
+                                """
+                                MERGE (o:Organization {name: $name})
+                                ON CREATE SET o.id = $id,
+                                              o.entity_type = 'ORGANIZATION',
+                                              o.city = $city,
+                                              o.postal_code = $postal_code,
+                                              o.contributor_class = $contributor_class,
+                                              o.created_at = $now
+                                ON MATCH SET o.updated_at = $now
+                                """,
+                                name=contributor.name,
+                                id=str(uuid4()),
+                                city=contributor.city,
+                                postal_code=contributor.postal_code,
+                                contributor_class=contributor_class,
+                                now=now,
+                            )
+                        else:
+                            # Individual contributors → Person node
+                            await session.run(
+                                """
+                                MERGE (p:Person {name: $name})
+                                ON CREATE SET p.id = $id,
+                                              p.entity_type = 'PERSON',
+                                              p.city = $city,
+                                              p.postal_code = $postal_code,
+                                              p.created_at = $now
+                                ON MATCH SET p.updated_at = $now
+                                """,
+                                name=contributor.name,
+                                id=str(uuid4()),
+                                city=contributor.city,
+                                postal_code=contributor.postal_code,
+                                now=now,
+                            )
+
+                        # Create CONTRIBUTED_TO relationship with all fields
+                        # (contributor_class, jurisdiction, election_id as properties)
+                        node_label = "Organization" if is_corporate else "Person"
                         await session.run(
-                            """
-                            MATCH (p:Person {name: $person_name})
-                            MATCH (tp:Organization {name: $third_party_name})
-                            MERGE (p)-[r:CONTRIBUTED_TO {election_id: $election_id}]->(tp)
+                            f"""
+                            MATCH (c:{node_label} {{name: $contributor_name}})
+                            MATCH (tp:Organization {{name: $third_party_name}})
+                            MERGE (c)-[r:CONTRIBUTED_TO {{election_id: $election_id}}]->(tp)
                             ON CREATE SET r.created_at = $now
                             SET r.amount = $amount,
+                                r.contributor_class = $contributor_class,
+                                r.jurisdiction = $jurisdiction,
                                 r.source = 'elections_canada',
                                 r.updated_at = $now
                             """,
-                            person_name=contributor.name,
+                            contributor_name=contributor.name,
                             third_party_name=record.third_party_name,
                             amount=float(contributor.amount),
                             election_id=record.election_id,
+                            contributor_class=contributor_class,
+                            jurisdiction=getattr(contributor, "jurisdiction", "federal"),
                             now=now,
                         )
 

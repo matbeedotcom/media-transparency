@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from . import NotFoundError
 from .auth import CurrentUser, OptionalUser
+from ..cases.reports.funding_chain import FundingChainReportGenerator
 from ..reporting.templates import (
     REPORT_TEMPLATES,
     ReportStatus,
@@ -445,3 +446,40 @@ def _convert_to_html(report_data: dict[str, Any]) -> str:
     html_parts.append("</body></html>")
 
     return "\n".join(html_parts)
+
+
+# =========================
+# Funding Chain Report (007)
+# =========================
+
+
+@router.get("/funding-chain/{case_id}")
+async def get_funding_chain_report(
+    case_id: UUID,
+    format: str = Query("json", pattern="^(json|markdown)$"),
+    user: OptionalUser = None,
+) -> dict[str, Any]:
+    """Get Funding Chain Report for a case.
+
+    Generates a funding chain report tracing the path from a political
+    ad to its ultimate corporate funders. Integrates evidence from
+    all available data sources with confidence scores.
+
+    Args:
+        case_id: UUID of the case
+        format: Output format ("json" or "markdown")
+
+    Returns:
+        Funding chain report data
+    """
+    generator = FundingChainReportGenerator()
+    report = await generator.generate(case_id, format=format)
+    
+    if format == "markdown":
+        return {
+            "case_id": str(case_id),
+            "format": "markdown",
+            "content": report,
+        }
+    
+    return report

@@ -53,6 +53,8 @@ from .meta_ads import MetaAdIngester, run_meta_ads_ingestion
 from .sedar import SEDARIngester, run_sedar_ingestion
 from .linkedin import LinkedInIngester, run_linkedin_ingestion
 from .search import search_all_sources, warmup_search_cache, CompanySearchResult, CompanySearchResponse
+from .beneficial_ownership import BeneficialOwnershipIngester, run_beneficial_ownership_ingestion
+from .google_ads import GooglePoliticalAdsIngester, run_google_ads_ingestion
 
 __all__ = [
     # Base classes and utilities
@@ -93,4 +95,9 @@ __all__ = [
     "warmup_search_cache",
     "CompanySearchResult",
     "CompanySearchResponse",
+    # Political Ad Funding ingesters (007)
+    "BeneficialOwnershipIngester",
+    "run_beneficial_ownership_ingestion",
+    "GooglePoliticalAdsIngester",
+    "run_google_ads_ingestion",
 ]

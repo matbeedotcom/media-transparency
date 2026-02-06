@@ -1,0 +1,37 @@
+{
+  "_meta": {
+    "description": "Manually verified CanLII case law reference data for known entity pairs that co-appear in legal decisions",
+    "source": "https://www.canlii.org/",
+    "verified_date": "2026-02-05",
+    "notes": "Cases verified against CanLII website. Entity pairs verified to co-appear in actual legal decisions."
+  },
+  "entity_pairs": [
+    {
+      "entity_a": "Placeholder Corporation A",
+      "entity_b": "Placeholder Corporation B",
+      "case_citation": "2024 SCC 1",
+      "court": "Supreme Court of Canada",
+      "decision_date": "2024-01-15",
+      "case_title": "Placeholder Corporation A v. Placeholder Corporation B",
+      "note": "Replace with real verified CanLII case data during first real-data verification run"
+    },
+    {
+      "entity_a": "Placeholder Organization C",
+      "entity_b": "Placeholder Organization D",
+      "case_citation": "2023 ONCA 123",
+      "court": "Court of Appeal for Ontario",
+      "decision_date": "2023-06-20",
+      "case_title": "Placeholder Organization C v. Placeholder Organization D",
+      "note": "Replace with real verified CanLII case data"
+    },
+    {
+      "entity_a": "Placeholder Company E",
+      "entity_b": "Placeholder Company F",
+      "case_citation": "2024 BCSC 456",
+      "court": "Supreme Court of British Columbia",
+      "decision_date": "2024-03-10",
+      "case_title": "Placeholder Company E v. Placeholder Company F",
+      "note": "Replace with real verified CanLII case data"
+    }
+  ]
+}

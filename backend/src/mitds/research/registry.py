@@ -96,6 +96,75 @@ INGESTER_CAPABILITIES: dict[str, IngesterCapability] = {
         jurisdictions=["CA"],
         requires_api_key=False,
     ),
+    # Political Ad Funding ingesters (007)
+    "elections_third_party": IngesterCapability(
+        name="elections_third_party",
+        supported_identifiers=[IdentifierType.ELECTIONS_TP_ID, IdentifierType.NAME],
+        lead_types_generated=[LeadType.POLITICAL_CONTRIBUTION, LeadType.FUNDING],
+        jurisdictions=["CA"],
+        requires_api_key=False,
+    ),
+    "beneficial_ownership": IngesterCapability(
+        name="beneficial_ownership",
+        supported_identifiers=[IdentifierType.CORP_NUMBER, IdentifierType.NAME],
+        lead_types_generated=[LeadType.BENEFICIAL_OWNERSHIP, LeadType.OWNERSHIP],
+        jurisdictions=["CA"],
+        requires_api_key=False,
+        rate_limit_per_minute=60,  # Polite crawling
+    ),
+    "bc_lobbying": IngesterCapability(
+        name="bc_lobbying",
+        supported_identifiers=[IdentifierType.NAME],
+        lead_types_generated=[LeadType.FUNDING],
+        jurisdictions=["CA"],
+        requires_api_key=False,
+    ),
+    "google_ads": IngesterCapability(
+        name="google_ads",
+        supported_identifiers=[IdentifierType.GOOGLE_AD_ID, IdentifierType.NAME],
+        lead_types_generated=[LeadType.SPONSORSHIP],
+        jurisdictions=["CA"],
+        requires_api_key=True,  # Requires Google Cloud credentials
+    ),
+    # Provincial elections ingesters (Phase 9)
+    "elections_ontario": IngesterCapability(
+        name="elections_ontario",
+        supported_identifiers=[IdentifierType.NAME],
+        lead_types_generated=[LeadType.POLITICAL_CONTRIBUTION],
+        jurisdictions=["CA"],
+        requires_api_key=False,
+    ),
+    "elections_bc": IngesterCapability(
+        name="elections_bc",
+        supported_identifiers=[IdentifierType.NAME],
+        lead_types_generated=[LeadType.POLITICAL_CONTRIBUTION],
+        jurisdictions=["CA"],
+        requires_api_key=False,
+    ),
+    "elections_alberta": IngesterCapability(
+        name="elections_alberta",
+        supported_identifiers=[IdentifierType.NAME],
+        lead_types_generated=[LeadType.POLITICAL_CONTRIBUTION],
+        jurisdictions=["CA"],
+        requires_api_key=False,
+    ),
+    # Corroborating evidence ingesters (Phase 10)
+    "canlii": IngesterCapability(
+        name="canlii",
+        supported_identifiers=[IdentifierType.CANLII_ID, IdentifierType.NAME],
+        lead_types_generated=[LeadType.INFRASTRUCTURE],
+        jurisdictions=["CA"],
+        requires_api_key=True,
+        rate_limit_per_minute=30,
+    ),
+    "ppsa": IngesterCapability(
+        name="ppsa",
+        supported_identifiers=[IdentifierType.NAME],
+        lead_types_generated=[LeadType.FUNDING],
+        jurisdictions=["CA"],
+        requires_api_key=True,
+        rate_limit_per_minute=10,  # Cost-gated
+    ),
 }
 
 

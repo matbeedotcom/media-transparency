@@ -127,6 +127,19 @@ class Settings(BaseSettings):
     meta_app_secret: str = Field(default="", repr=False)
     meta_access_token: str = Field(default="", repr=False)
 
+    # Political Ad Funding Data Sources
+    canlii_api_key: str = Field(default="", repr=False)
+    google_application_credentials: str = Field(
+        default="",
+        repr=False,
+        description="Path to Google Cloud service account JSON for BigQuery",
+    )
+    ppsa_canada_api_key: str = Field(default="", repr=False)
+    ppsa_canada_api_url: str = Field(
+        default="https://api.ppsacanada.com/v1",
+        description="PPSACanada SOAP API base URL",
+    )
+
     # Meta OAuth Configuration
     # NOTE: Meta requires HTTPS for callback URLs in production.
     # localhost is allowed without HTTPS during development.

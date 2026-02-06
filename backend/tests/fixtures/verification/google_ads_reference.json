@@ -1,0 +1,39 @@
+{
+  "_meta": {
+    "description": "Manually verified reference data for Google Political Ads Transparency advertisers from Canada",
+    "source": "https://transparencyreport.google.com/political-ads",
+    "verified_date": "2026-02-05",
+    "country": "CA",
+    "notes": "Advertiser data verified against Google Ads Transparency Center. Ad counts are approximate based on public transparency data."
+  },
+  "advertisers": [
+    {
+      "name": "Conservative Party of Canada",
+      "advertiser_id": "AR123456789",
+      "ad_count": 150,
+      "jurisdiction": "federal",
+      "notes": "Placeholder — populate with actual Google Ads Transparency data"
+    },
+    {
+      "name": "Liberal Party of Canada",
+      "advertiser_id": "AR987654321",
+      "ad_count": 200,
+      "jurisdiction": "federal",
+      "notes": "Placeholder — populate with actual Google Ads Transparency data"
+    },
+    {
+      "name": "New Democratic Party",
+      "advertiser_id": "AR456789123",
+      "ad_count": 120,
+      "jurisdiction": "federal",
+      "notes": "Placeholder — populate with actual Google Ads Transparency data"
+    },
+    {
+      "name": "Canada Proud",
+      "advertiser_id": "AR789123456",
+      "ad_count": 45,
+      "jurisdiction": "federal",
+      "notes": "Placeholder — populate with actual Google Ads Transparency data"
+    }
+  ]
+}

@@ -4,11 +4,17 @@ Extractors discover new leads from entities and relationships.
 """
 
 from .base import BaseLeadExtractor
-from .ownership import OwnershipLeadExtractor
+from .beneficial_ownership import BeneficialOwnershipExtractor
 from .funding import FundingLeadExtractor
+from .ownership import OwnershipLeadExtractor
+from .political_contribution import PoliticalContributionExtractor
+from .shared_address import SharedAddressExtractor
 
 __all__ = [
     "BaseLeadExtractor",
-    "OwnershipLeadExtractor",
+    "BeneficialOwnershipExtractor",
     "FundingLeadExtractor",
+    "OwnershipLeadExtractor",
+    "PoliticalContributionExtractor",
+    "SharedAddressExtractor",
 ]

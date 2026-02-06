@@ -61,8 +61,11 @@ dependencies = [
     "lxml>=5.1.0",
     "defusedxml>=0.7.1",
 
-    # PDF Processing (SEDAR+)
+    # PDF Processing (SEDAR+, Elections Canada returns)
     "pdfplumber>=0.10.0",
+
+    # Google BigQuery (Political Ads Transparency)
+    "google-cloud-bigquery>=3.17.0",
 
     # Excel/XLSX Processing (Provincial data)
     "openpyxl>=3.1.0",

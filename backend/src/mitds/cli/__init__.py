@@ -16,6 +16,7 @@ from .detect import cli as detect_cli
 from .research import cli as research_cli
 from .cases import case_group
 from .dev import cli as dev_cli
+from .verify import cli as verify_cli
 
 
 @click.group()
@@ -36,6 +37,7 @@ main.add_command(detect_cli, name="detect")
 main.add_command(research_cli, name="research")
 main.add_command(case_group, name="case")
 main.add_command(dev_cli, name="dev")
+main.add_command(verify_cli, name="verify")
 
 
 if __name__ == "__main__":

@@ -1872,3 +1872,190 @@ async def quick_ingest_corporation(
         external_matches=external_matches,
         message=f"No matches found for '{request.name}'. Try different search terms or check spelling.",
     )
+
+
+# =============================================================================
+# Political Ad Funding Endpoints (007)
+# =============================================================================
+
+
+class ContributorItem(BaseModel):
+    """A contributor to a third-party advertiser."""
+
+    name: str
+    contributor_class: str | None = None
+    amount: float | None = None
+    city: str | None = None
+    province: str | None = None
+    entity_id: str | None = None
+
+
+class ContributorListResponse(BaseModel):
+    """Response for third-party contributor list."""
+
+    advertiser_name: str | None = None
+    jurisdiction: str
+    election_id: str | None = None
+    total_contributors: int = 0
+    contributors: list[ContributorItem] = []
+
+
+@router.get(
+    "/elections-third-party/{jurisdiction}/contributors",
+    response_model=ContributorListResponse,
+    tags=["Political Funding"],
+    summary="Get Third-Party Contributors",
+)
+async def get_third_party_contributors(
+    jurisdiction: str,
+    advertiser_name: str | None = None,
+    advertiser_id: str | None = None,
+    election_id: str | None = None,
+    min_amount: float | None = None,
+    contributor_class: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    """Get contributor list for a specific third-party advertiser.
+
+    Returns contributors extracted from Elections Canada/Provincial
+    financial returns (EC20228 form).
+    """
+    from ..db import get_neo4j_session
+
+    try:
+        async with get_neo4j_session() as session:
+            # Build query
+            where_clauses = ["tp.is_election_third_party = true"]
+            params: dict[str, Any] = {"limit": limit, "offset": offset}
+
+            if advertiser_name:
+                where_clauses.append("toLower(tp.name) CONTAINS toLower($advertiser_name)")
+                params["advertiser_name"] = advertiser_name
+
+            if election_id:
+                where_clauses.append("r.election_id = $election_id")
+                params["election_id"] = election_id
+
+            if min_amount:
+                where_clauses.append("r.amount >= $min_amount")
+                params["min_amount"] = min_amount
+
+            if contributor_class:
+                where_clauses.append("r.contributor_class = $contributor_class")
+                params["contributor_class"] = contributor_class
+
+            where_str = " AND ".join(where_clauses)
+
+            query = f"""
+                MATCH (c)-[r:CONTRIBUTED_TO]->(tp:Organization)
+                WHERE {where_str}
+                RETURN c.name AS name, c.id AS entity_id,
+                       r.amount AS amount, r.contributor_class AS contributor_class,
+                       r.election_id AS election_id,
+                       c.city AS city, c.province AS province,
+                       tp.name AS advertiser_name
+                ORDER BY r.amount DESC
+                SKIP $offset LIMIT $limit
+            """
+
+            result = await session.run(query, **params)
+            records = await result.data()
+
+            contributors = [
+                ContributorItem(
+                    name=r["name"],
+                    contributor_class=r.get("contributor_class"),
+                    amount=r.get("amount"),
+                    city=r.get("city"),
+                    province=r.get("province"),
+                    entity_id=r.get("entity_id"),
+                )
+                for r in records
+            ]
+
+            tp_name = records[0]["advertiser_name"] if records else advertiser_name
+
+            return ContributorListResponse(
+                advertiser_name=tp_name,
+                jurisdiction=jurisdiction,
+                election_id=election_id,
+                total_contributors=len(contributors),
+                contributors=contributors,
+            )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to query contributors: {e}")
+
+
+class BeneficialOwnerItem(BaseModel):
+    """A beneficial owner (ISC) record."""
+
+    full_name: str
+    date_became_isc: str | None = None
+    date_ceased_isc: str | None = None
+    control_description: str | None = None
+    service_address: str | None = None
+    entity_id: str | None = None
+
+
+class BeneficialOwnershipResponse(BaseModel):
+    """Response for beneficial ownership query."""
+
+    corporation_number: str
+    corporation_name: str | None = None
+    individuals_with_significant_control: list[BeneficialOwnerItem] = []
+
+
+@router.get(
+    "/beneficial-ownership/{corporation_number}",
+    response_model=BeneficialOwnershipResponse,
+    tags=["Political Funding"],
+    summary="Get Beneficial Owners",
+)
+async def get_beneficial_owners(corporation_number: str):
+    """Query beneficial ownership data for a corporation.
+
+    Returns ISC (Individuals with Significant Control) data
+    from the federal beneficial ownership registry.
+    """
+    from ..db import get_neo4j_session
+
+    try:
+        async with get_neo4j_session() as session:
+            result = await session.run(
+                """
+                MATCH (p:Person)-[r:BENEFICIAL_OWNER_OF]->(o:Organization {canada_corp_num: $corp_num})
+                RETURN p.name AS full_name, p.id AS entity_id,
+                       r.control_description AS control_description,
+                       r.date_from AS date_from, r.date_to AS date_to,
+                       o.name AS corp_name
+                ORDER BY p.name
+                """,
+                corp_num=corporation_number,
+            )
+            records = await result.data()
+
+            corp_name = records[0]["corp_name"] if records else None
+
+            owners = [
+                BeneficialOwnerItem(
+                    full_name=r["full_name"],
+                    date_became_isc=r.get("date_from"),
+                    date_ceased_isc=r.get("date_to"),
+                    control_description=r.get("control_description"),
+                    entity_id=r.get("entity_id"),
+                )
+                for r in records
+            ]
+
+            return BeneficialOwnershipResponse(
+                corporation_number=corporation_number,
+                corporation_name=corp_name,
+                individuals_with_significant_control=owners,
+            )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to query beneficial ownership: {e}"
+        )

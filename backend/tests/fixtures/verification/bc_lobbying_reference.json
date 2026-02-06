@@ -1,0 +1,35 @@
+{
+  "_meta": {
+    "description": "Manually verified reference data for BC Lobbyist Registry lobbyist-client pairs",
+    "source": "https://lobbyistsregistrar.bc.ca/the-registry/open-data/",
+    "verified_date": "2026-02-05",
+    "jurisdiction": "BC",
+    "notes": "Placeholder data - replace with actual verified lobbyist-client pairs from BC ORL"
+  },
+  "lobbyist_pairs": [
+    {
+      "lobbyist": "John Smith",
+      "client": "ABC Corporation",
+      "registration_id": "REG-2024-001",
+      "subject_matters": ["Energy", "Environment"],
+      "jurisdiction": "BC",
+      "note": "Placeholder - replace with actual verified data"
+    },
+    {
+      "lobbyist": "Jane Doe",
+      "client": "XYZ Industries Ltd.",
+      "registration_id": "REG-2024-002",
+      "subject_matters": ["Transportation", "Infrastructure"],
+      "jurisdiction": "BC",
+      "note": "Placeholder - replace with actual verified data"
+    },
+    {
+      "lobbyist": "Robert Johnson",
+      "client": "Tech Solutions Inc.",
+      "registration_id": "REG-2024-003",
+      "subject_matters": ["Technology", "Privacy"],
+      "jurisdiction": "BC",
+      "note": "Placeholder - replace with actual verified data"
+    }
+  ]
+}

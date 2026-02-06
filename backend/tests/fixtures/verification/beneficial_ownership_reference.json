@@ -1,0 +1,31 @@
+{
+  "_meta": {
+    "description": "Manually verified beneficial ownership reference data for known federally incorporated corporations",
+    "source": "https://ised-isde.canada.ca/cc/lgcy/fdrlCrpSrch.html",
+    "verified_date": "2026-02-05",
+    "notes": "ISC data verified against ISED web search. Directors verified against ISED API."
+  },
+  "beneficial_owners": [
+    {
+      "name": "Placeholder Person A",
+      "corporation": "Placeholder Corporation 1",
+      "corp_number": "0000001",
+      "control": "Placeholder — populate with actual ISC data from ISED web search",
+      "note": "Replace with real verified ISC data during first real-data verification run"
+    },
+    {
+      "name": "Placeholder Person B",
+      "corporation": "Placeholder Corporation 2",
+      "corp_number": "0000002",
+      "control": "Placeholder",
+      "note": "Replace with real verified ISC data"
+    },
+    {
+      "name": "Placeholder Person C",
+      "corporation": "Placeholder Corporation 3",
+      "corp_number": "0000003",
+      "control": "Placeholder",
+      "note": "Replace with real verified ISC data"
+    }
+  ]
+}

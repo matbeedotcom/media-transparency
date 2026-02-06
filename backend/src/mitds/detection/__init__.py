@@ -6,6 +6,7 @@ Provides detection algorithms for:
 - Infrastructure sharing detection
 - Composite scoring
 - Hard negative filtering
+- Political funding obfuscation detection
 """
 
 from .funding import (
@@ -46,6 +47,12 @@ from .hardneg import (
     HardNegativeFilterChain,
     HardNegativeEvent,
 )
+from .political_funding import (
+    PoliticalFundingObfuscationDetector,
+    PoliticalFundingSignal,
+    PoliticalFundingSignalType,
+    PoliticalFundingCategory,
+)
 
 __all__ = [
     # Funding
@@ -81,4 +88,9 @@ __all__ = [
     "check_hard_negatives",
     "HardNegativeFilterChain",
     "HardNegativeEvent",
+    # Political Funding
+    "PoliticalFundingObfuscationDetector",
+    "PoliticalFundingSignal",
+    "PoliticalFundingSignalType",
+    "PoliticalFundingCategory",
 ]

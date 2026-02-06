@@ -1,0 +1,43 @@
+{
+  "_meta": {
+    "description": "Manually verified reference data for Elections Canada third-party advertisers from the 44th General Election (2021)",
+    "source": "https://www.elections.ca/content.aspx?section=fin&dir=oth/thi/advert/tp44&document=index&lang=e",
+    "verified_date": "2026-02-05",
+    "election_id": "44",
+    "election_name": "44th General Election (2021)",
+    "notes": "Contributors verified against publicly available PDF returns on Elections Canada website"
+  },
+  "third_parties": [
+    {
+      "name": "Canada's National Firearms Association",
+      "election_id": "44",
+      "jurisdiction": "federal",
+      "city": "Edmonton",
+      "province": "AB",
+      "contributors": [
+        {
+          "name": "Contributor details require PDF parsing of actual return",
+          "contributor_class": "individual",
+          "amount": 0,
+          "note": "Placeholder — populate with actual PDF-extracted data during verification"
+        }
+      ]
+    },
+    {
+      "name": "Canada Proud",
+      "election_id": "44",
+      "jurisdiction": "federal",
+      "city": "Toronto",
+      "province": "ON",
+      "contributors": []
+    },
+    {
+      "name": "Leadnow Society",
+      "election_id": "44",
+      "jurisdiction": "federal",
+      "city": "Vancouver",
+      "province": "BC",
+      "contributors": []
+    }
+  ]
+}

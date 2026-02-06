@@ -42,6 +42,8 @@ class LeadType(str, Enum):
     BOARD_INTERLOCK = "board_interlock"
     CROSS_BORDER = "cross_border"
     INFRASTRUCTURE = "infrastructure"
+    POLITICAL_CONTRIBUTION = "political_contribution"
+    BENEFICIAL_OWNERSHIP = "beneficial_ownership"
 
 
 class IdentifierType(str, Enum):
@@ -56,6 +58,10 @@ class IdentifierType(str, Enum):
     OPENCORP_ID = "opencorp_id"
     LITTLESIS_ID = "littlesis_id"
     ENTITY_ID = "entity_id"
+    ELECTIONS_TP_ID = "elections_tp_id"
+    GOOGLE_AD_ID = "google_ad_id"
+    CORP_NUMBER = "corp_number"
+    CANLII_ID = "canlii_id"
 
 
 class LeadStatus(str, Enum):

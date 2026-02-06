@@ -16,6 +16,9 @@ from ..resolution.matcher import HybridMatcher
 from .extractors.base import BaseLeadExtractor
 from .extractors.funding import CrossBorderFundingExtractor, FundingLeadExtractor
 from .extractors.ownership import OwnershipLeadExtractor
+from .extractors.political_contribution import PoliticalContributionExtractor
+from .extractors.beneficial_ownership import BeneficialOwnershipExtractor
+from .extractors.shared_address import SharedAddressExtractor
 from .models import (
     IdentifierType,
     Lead,
@@ -66,6 +69,9 @@ class LeadProcessor:
                 OwnershipLeadExtractor(),
                 FundingLeadExtractor(),
                 CrossBorderFundingExtractor(),
+                PoliticalContributionExtractor(),
+                BeneficialOwnershipExtractor(),
+                SharedAddressExtractor(),
             ]
         else:
             self.extractors = extractors
